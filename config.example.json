@@ -1,0 +1,4 @@
+{
+  "_comment": "Copy this file to config.json and add your own free NASA API key from https://api.nasa.gov. config.json is gitignored so your key never leaves your machine. If you skip this, the app falls back to NASA's shared DEMO_KEY (heavily rate-limited).",
+  "nasa_api_key": "DEMO_KEY"
+}

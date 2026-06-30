@@ -1,0 +1,25 @@
+# Personal config — holds your NASA API key. NEVER commit this.
+config.json
+dashboard/config.json
+
+# Build artifacts
+*.app/
+NERV.app/
+build/
+*.o
+*.dSYM/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Logs / runtime
+*.log
+*.pid
+
+# Editor
+.vscode/
+.idea/
+*.swp

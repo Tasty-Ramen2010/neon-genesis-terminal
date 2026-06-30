@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# nerv-dash — control the NERV console (Claude terminal + graphical visuals).
+#   nerv-dash                start services + open in browser
+#   nerv-dash serve          start services only (no browser; used by NERV.app)
+#   nerv-dash term           open a standalone cool-retro-term terminal
+#   nerv-dash restart-term   restart ONLY the embedded Claude terminal
+#   nerv-dash stop-term      stop ONLY the embedded terminals
+#   nerv-dash stop           stop the whole console
+#   nerv-dash kill           hard-stop everything + clear stray audio (panic)
+#   nerv-dash status         show what's running
+set -uo pipefail
+DIR="$HOME/.config/nerv-theme/dashboard"
+PORT="${NERV_PORT:-8731}"; TPORT="${NERV_TTYD_PORT:-7682}"; SPORT="${NERV_SHELL_PORT:-7683}"
+PROJECT="${NERV_PROJECT:-$PWD}"; URL="http://127.0.0.1:$PORT/"
+# NASA key: pass through env if set; otherwise nerv-server.py reads ~/.config/nerv-theme/config.json,
+# then falls back to DEMO_KEY. Never hardcode a personal key here (this file is public).
+[ -n "${NASA_API_KEY:-}" ] && export NASA_API_KEY
+PIDFILE="${TMPDIR:-/tmp}/nerv-dash.pid"; TPIDFILE="${TMPDIR:-/tmp}/nerv-ttyd.pid"; SPIDFILE="${TMPDIR:-/tmp}/nerv-shell.pid"
+
+stats_up(){ curl -s "http://127.0.0.1:$PORT/ping" >/dev/null 2>&1; }
+term_up(){ curl -s -o /dev/null "http://127.0.0.1:$TPORT/" 2>/dev/null; }
+shell_up(){ curl -s -o /dev/null "http://127.0.0.1:$SPORT/" 2>/dev/null; }
+TTYD_OPTS=(-W -i 127.0.0.1 -m 6 -t fontSize=15 -t 'fontFamily=SF Mono,Menlo,monospace' -t cursorBlink=true -t scrollback=5000 \
+  -t 'theme={"background":"#04070b","foreground":"#a8f5c8","cursor":"#39ff86","selectionBackground":"#1f4a3a","brightBlack":"#5c7378"}')
+start_stats(){ stats_up && return 0; NERV_PORT="$PORT" NERV_PROJECT="$PROJECT" python3 "$DIR/nerv-server.py" >/tmp/nerv-dash.log 2>&1 & echo $! >"$PIDFILE"; }
+start_term(){ term_up && return 0; NERV_PROJECT="$PROJECT" ttyd "${TTYD_OPTS[@]}" -p "$TPORT" "$DIR/term-launch" >/tmp/nerv-ttyd.log 2>&1 & echo $! >"$TPIDFILE"; }
+start_shell(){ shell_up && return 0; NERV_PROJECT="$PROJECT" ttyd "${TTYD_OPTS[@]}" -p "$SPORT" "$DIR/shell-launch" >/tmp/nerv-shell.log 2>&1 & echo $! >"$SPIDFILE"; }
+stop_stats(){ [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null; rm -f "$PIDFILE"; pkill -f "$DIR/nerv-server.py" 2>/dev/null; }
+stop_term(){ for pf in "$TPIDFILE" "$SPIDFILE"; do [ -f "$pf" ] && kill "$(cat "$pf")" 2>/dev/null; rm -f "$pf"; done
+  pkill -f "ttyd .*-p $TPORT" 2>/dev/null; pkill -f "ttyd .*-p $SPORT" 2>/dev/null; }
+wait_up(){ for i in $(seq 1 30); do stats_up && term_up && shell_up && return 0; sleep 0.2; done; }
+
+case "${1:-up}" in
+  stop)        stop_term; stop_stats; echo "NERV console stopped"; exit 0;;
+  stop-term)   stop_term; echo "terminals stopped"; exit 0;;
+  restart-term) stop_term; sleep 0.4; start_term; start_shell; echo "terminals restarted"; exit 0;;
+  kill)        stop_term; stop_stats; pkill -9 -f "$DIR/nerv-server.py" 2>/dev/null
+               pkill -9 -f "ttyd .*-p $TPORT" 2>/dev/null; pkill -9 -f "ttyd .*-p $SPORT" 2>/dev/null
+               pkill -9 -x afplay 2>/dev/null; echo "hard-stopped all NERV + cleared audio"; exit 0;;
+  status)      stats_up && echo "stats: UP" || echo "stats: down"; term_up && echo "claude: UP" || echo "claude: down"; shell_up && echo "shell: UP" || echo "shell: down"; exit 0;;
+  term)        if [ -d "/Applications/cool-retro-term.app" ]; then open -na cool-retro-term; else open -a Terminal; fi; exit 0;;
+  serve)       start_stats; start_term; start_shell; wait_up
+               stats_up || { echo "stats failed"; tail -4 /tmp/nerv-dash.log; }
+               echo "NERV services up (stats:$PORT claude:$TPORT shell:$SPORT)"; exit 0;;
+esac
+
+start_stats; start_term; start_shell; wait_up
+if [ -d "/Applications/Google Chrome.app" ]; then open -na "Google Chrome" --args --app="$URL" --window-size=1700,1050 >/dev/null 2>&1
+else open "$URL"; fi
+echo "NERV console -> $URL   (stop: nerv-dash stop)"

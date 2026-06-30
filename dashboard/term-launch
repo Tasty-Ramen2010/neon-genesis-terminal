@@ -1,0 +1,10 @@
+#!/bin/zsh
+# What ttyd runs as the embedded terminal: a login-ish shell that launches Claude,
+# falling back to an interactive shell if claude exits or isn't found.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.bun/bin:$PATH"
+cd "${NERV_PROJECT:-$HOME}" 2>/dev/null
+clear
+if command -v claude >/dev/null 2>&1; then
+  claude
+fi
+exec /bin/zsh -il
