@@ -42,8 +42,16 @@ Planetary K-index gauge, solar-wind speed & proton density, IMF Bz, geomagnetic 
 ### 🛸 Cosmic telemetry
 A header readout that's never the same twice — rotates between your civilization's live **Kardashev type** (`TYPE 0.728140 ▲`, low digits shimmering) and the **age of the universe** ticking up second by second since the Big Bang. Computed client-side, no API.
 
-### 🖥 Embedded terminal
-A real `ttyd` terminal in the main panel. Opens a **plain shell** by default; one click toggles it to **Claude Code** (if `claude` is installed). The whole console is a terminal you happen to be flying.
+### 🖥 Embedded terminal (custom, with phosphor burn-in)
+A real terminal in the main panel — **xterm.js** over a stdlib **PTY-over-WebSocket** bridge (no external terminal dependency). It's a genuine login shell, so Tab-completion, `Ctrl-R`, paste, and every other shortcut just work. Opens a **plain shell** by default; one click toggles to **Claude Code** (if `claude` is installed). With CRT mode on, **every character you type leaves a glowing phosphor burn-in that fades over ~1 second.**
+
+### 🛰 Hubble + deep-space fleet
+The **Hubble Space Telescope** is tracked on the globe from its real TLE, with a live altitude readout. The rotating telemetry line also reaches into deep space — live, ever-increasing distances to **Voyager 1 & 2**, **New Horizons**, and **Pioneer 10**, in km and light-hours.
+
+### 🌍 The Earth reacts
+- **Live aurora oval** — glowing rings around the poles, scaled by the real Kp index (they brighten and creep equatorward as geomagnetic activity climbs).
+- **Earthquake pulses** — every quake from the live USGS feed sends an expanding, magnitude-colored ripple from its epicenter.
+- **Next launch countdown** — the rotating readout shows the next orbital launch with a live `T-` clock.
 
 ### 📊 System monitor & network feed
 btop-style CPU/MEM/NET/disk graphs, a live per-process bandwidth meter (iftop-style), and a streaming log of every outbound network connection your machine makes.
@@ -81,9 +89,10 @@ The installer checks for these and tells you how to get any you're missing:
 
 | Tool | Why | Install |
 |------|-----|---------|
-| `python3` | stdlib-only backend (data sampler + HTTP) | preinstalled / `brew install python3` |
-| `ttyd`    | the embedded terminal | `brew install ttyd` |
+| `python3` | stdlib-only backend (data sampler + HTTP + PTY terminal) | preinstalled / `brew install python3` |
 | Xcode CLT | `swiftc` to build the native app | `xcode-select --install` |
+
+That's it — the terminal (xterm.js) is vendored in the repo and the backend is pure Python stdlib, so there's nothing else to install.
 
 Prefer no app? Run **`nerv-dash`** to start the services and open the console in your browser instead.
 
@@ -111,19 +120,19 @@ NERV.app (Swift WKWebView, opens maximized)
 http://127.0.0.1:8731/  ──  nerv-server.py  (Python stdlib only)
         │                     • one background sampler thread caches all stats
         │                     • HTTP handlers only read the cache (polling never blocks)
-        │                     • fetches: NASA NeoWs · Celestrak TLE · NOAA SWPC · open-notify ISS
+        │                     • fetches: NASA NeoWs · Celestrak TLE (sats + Hubble) ·
+        │                       NOAA SWPC · USGS quakes · Launch Library · open-notify ISS
+        │                     • /pty  — WebSocket ⇄ PTY login shell (the terminal)
         ▼
-nerv-dashboard.html  (vanilla JS + Canvas 2D, one self-contained file)
-        │  embeds
-        ▼
-ttyd :7682 (shell/Claude)  +  ttyd :7683 (shell)   as <iframe>s
+nerv-dashboard.html  (vanilla JS + Canvas 2D + xterm.js, self-contained)
+        │  same-origin terminal over ws://…/pty  (no ttyd, no iframe)
 ```
 
 - **`nerv-dash`** — the launcher (see the command reference below).
 - **`nerv-server.py`** — backend. All external fetches happen on a timer in one thread and are cached; the render loop and HTTP polling never trigger per-request work.
 - **`nerv-dashboard.html`** — the entire frontend. Panels swap via CSS grid-area reassignment, so the terminal iframe never reloads when you rearrange the deck.
 - The render loop throttles to ~30fps and pauses entirely when the window is hidden.
-- **Multiple instances:** each window asks `nerv-dash` for a free `{stats, ttyd, shell}` port triplet (8731/7682/7683, then +10 each), and the server injects those ports into its page — so consoles never collide.
+- **Multiple instances:** each window asks `nerv-dash` for a free port triplet (8731 + spares, then +10 each) and runs its own server — so consoles never collide.
 
 ---
 
@@ -140,7 +149,7 @@ Everything is driven by **`nerv-dash`** (installed to `~/.local/bin`). The nativ
 | `nerv-dash restart-term` | Restart just the embedded terminals |
 | `nerv-dash stop` | Stop this instance (the one on `$NERV_PORT`, default 8731) |
 | `nerv-dash kill` | Panic: hard-stop everything + clear stray audio |
-| `nerv-dash ports` | Print the next free `{stats ttyd shell}` triplet |
+| `nerv-dash ports` | Print the next free port triplet |
 | `open /Applications/NERV.app` | Launch the native app (open it again for a second window/instance) |
 
 **Environment overrides** (for manual control): `NASA_API_KEY`, `NERV_PORT`, `NERV_TTYD_PORT`, `NERV_SHELL_PORT`, `NERV_PROJECT`.

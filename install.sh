@@ -36,13 +36,12 @@ say "${CYAN}▸ Checking dependencies…${RST}"
 MISSING=()
 command -v python3 >/dev/null 2>&1 && ok "python3" || MISSING+=("python3")
 command -v swiftc  >/dev/null 2>&1 && ok "swiftc (Xcode CLT)" || MISSING+=("xcode-select")
-command -v ttyd    >/dev/null 2>&1 && ok "ttyd" || MISSING+=("ttyd")
+# The terminal is now built in (xterm.js + a stdlib PTY bridge) — no ttyd needed.
 
 if [ ${#MISSING[@]} -gt 0 ]; then
   warn "Missing: ${MISSING[*]}"
   for m in "${MISSING[@]}"; do
     case "$m" in
-      ttyd)         say "    install with: ${DIM}brew install ttyd${RST}";;
       xcode-select) say "    install with: ${DIM}xcode-select --install${RST}";;
       python3)      say "    install with: ${DIM}brew install python3${RST}";;
     esac
@@ -58,6 +57,7 @@ cp "$HERE/dashboard/nerv-server.py"      "$DASH/"
 cp "$HERE/dashboard/nerv-dash"           "$DASH/"
 cp "$HERE/dashboard/term-launch"         "$DASH/"
 cp "$HERE/dashboard/shell-launch"        "$DASH/"
+mkdir -p "$DASH/vendor"; cp "$HERE"/dashboard/vendor/* "$DASH/vendor/"   # xterm.js terminal
 chmod +x "$DASH/nerv-dash" "$DASH/term-launch" "$DASH/shell-launch" "$DASH/nerv-server.py"
 ok "dashboard files copied"
 

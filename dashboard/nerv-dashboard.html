@@ -54,7 +54,7 @@
   header .clock{color:var(--grn); font-size:18px; letter-spacing:2px; text-shadow:0 0 8px var(--grn)}
   header .mt{color:var(--amber); font-size:10px; text-align:right}
   header .cosmic{font-size:10px; text-align:right; line-height:1.35; padding-right:12px; margin-right:10px;
-    border-right:1px solid var(--amber2); min-width:188px}
+    border-right:1px solid var(--amber2); min-width:214px}
   header .cosmic .cl{color:var(--dim2); letter-spacing:1px}
   header .cosmic .cv{color:var(--cyan); letter-spacing:1px; text-shadow:0 0 7px rgba(63,224,224,.5); font-variant-numeric:tabular-nums}
 
@@ -184,7 +184,15 @@
   #bootseq .bhint{color:var(--dim2); font-size:10px; letter-spacing:3px; text-align:center; margin-top:12px}
   #bootseq .bhint.go{color:var(--grn); cursor:pointer; text-shadow:0 0 8px var(--grn); animation:bp 1.1s infinite}
   @keyframes bp{50%{opacity:.4}}
+
+  /* custom terminal (xterm.js, same-origin — replaces ttyd iframe) */
+  #termhost{position:absolute; inset:0; background:#04070b; overflow:hidden}
+  #xterm{position:absolute; inset:0; padding:6px 8px}
+  #xterm .xterm{height:100%}
+  #burn{position:absolute; inset:0; pointer-events:none; z-index:4}
+  .xterm-viewport::-webkit-scrollbar{width:8px} .xterm-viewport::-webkit-scrollbar-thumb{background:#1f4a3a;border-radius:4px}
 </style>
+<link rel="stylesheet" href="/vendor/xterm.css">
 </head>
 <body>
 <div id="crt">
@@ -202,7 +210,7 @@
   <div id="deck">
     <section class="mod" id="m_term">
       <div class="tab">NERV TERMINAL · MAGI-01 ENTRY PLUG <span class="r" id="termMode">CLAUDE</span><span class="fsb" data-fs="term">⤢</span></div>
-      <div class="body"><iframe id="term" title="terminal"></iframe><div class="catch" id="catch_term" data-main="term"></div></div>
+      <div class="body"><div id="termhost"><div id="xterm"></div><canvas id="burn"></canvas></div><div class="catch" id="catch_term" data-main="term"></div></div>
     </section>
     <section class="mod" id="m_globe">
       <div class="tab g">GEOCENTRIC MAP <span class="r" id="trackInfo">TRACKING</span><span class="fsb" data-fs="globe">⤢</span></div>
@@ -267,6 +275,8 @@
   </div>
 </div>
 
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
 <script>
 "use strict";
 const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s), TAU=Math.PI*2, clamp=(v,a,b)=>v<a?a:v>b?b:v;
@@ -274,7 +284,7 @@ const DPR=Math.min(window.devicePixelRatio||1,1.6);
 const TPORT=window.NERV_TTYD_PORT||7682, SPORT=window.NERV_SHELL_PORT||7683;
 let S={ready:false,cpu:0,mem:0,net_down:0,net_up:0,disk:0,load:0,ncpu:8,procs:[],git:{repo:false},
   battery:100,charging:true,iface:'en0',uptime:'',host:'',user:'operator',mem_used:0,mem_total:0,
-  conns:[],conn_count:0,iss:null,neo:[],sats:[],spaceweather:null};
+  conns:[],conn_count:0,iss:null,neo:[],sats:[],spaceweather:null,hubble:null,quakes:[],launch:null};
 const hist={cpu:[],mem:[],net:[],disk:[]}; const HL=70; function pushH(k,v){const a=hist[k];a.push(v);if(a.length>HL)a.shift();}
 
 /* ============ AUDIO (safe single context) ============ */
@@ -303,7 +313,7 @@ function place(){
   ORDER.forEach(id=>{const c=$('#catch_'+id); if(c) c.style.display=(id===mainId&&!fsId)||id===fsId?'none':'block';
     $('#m_'+id).classList.toggle('big',(id===mainId&&!fsId)||id===fsId);});
   $$('#bar .btn[data-main]').forEach(b=>b.classList.toggle('on',b.dataset.main===mainId&&!fsId));
-  setTimeout(()=>{sizeGlobe();layoutMon();sizeBig();renderMonBig();renderFeedBig();renderSpaceWeather();},40);
+  setTimeout(()=>{sizeGlobe();layoutMon();sizeBig();renderMonBig();renderFeedBig();renderSpaceWeather();if(typeof termFit==='function')termFit();},40);
 }
 function setMain(id){ mainId=id; fsId=null; place(); uiBlip(); }
 function toggleFs(id){ fsId=(fsId===id)?null:id; place(); uiBlip(); }
@@ -313,12 +323,46 @@ $$('.fsb').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation(); toggle
 $$('.mod>.tab').forEach(t=>t.addEventListener('dblclick',()=>{ const id=t.parentElement.id.slice(2); toggleFs(id); }));
 window.addEventListener('keydown',e=>{ if(e.key==='Escape'&&fsId){fsId=null;place();} });
 
-/* ============ TERMINAL ============ */
-let termMode='shell';
-function setTerm(mode){ termMode=mode; $('#term').src='http://'+location.hostname+':'+(mode==='shell'?SPORT:TPORT)+'/';
-  $('#termMode').textContent=mode.toUpperCase(); uiBlip(); }
+/* ============ TERMINAL (custom xterm.js + PTY-over-websocket, with burn-in) ============ */
+let termMode='shell', term=null, fitAddon=null, ws=null, bcv=null, bctx=null, burns=[];
+const STATS_PORT=window.NERV_STATS_PORT||location.port||8731;
+function initTerm(){
+  term=new Terminal({ fontSize:14, fontFamily:'SF Mono, Menlo, monospace', cursorBlink:true, allowProposedApi:true,
+    scrollback:5000, theme:{ background:'#04070b', foreground:'#a8f5c8', cursor:'#39ff86', cursorAccent:'#04070b',
+      selectionBackground:'#1f4a3a', black:'#04070b', brightBlack:'#5c7378', green:'#46e88a', cyan:'#3fe0e0', yellow:'#f5d128' } });
+  fitAddon=new FitAddon.FitAddon(); term.loadAddon(fitAddon);
+  term.open($('#xterm'));
+  term.onData(d=>{ if(ws&&ws.readyState===1) ws.send(new TextEncoder().encode(d)); burnStamp(d); });
+  bcv=$('#burn'); bctx=bcv.getContext('2d');
+  termConnect('shell'); requestAnimationFrame(burnLoop);
+}
+function termConnect(mode){
+  termMode=mode; $('#termMode').textContent=mode.toUpperCase();
+  if(ws){ try{ws.onclose=null; ws.close();}catch(e){} ws=null; }
+  ws=new WebSocket('ws://'+location.hostname+':'+STATS_PORT+'/pty?mode='+mode); ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ termFit(); };
+  ws.onmessage=e=>{ term.write(typeof e.data==='string'?e.data:new Uint8Array(e.data)); };
+  ws.onclose=()=>{ if(term) term.write('\r\n\x1b[2m[ link closed — press ⟳ RESTART ]\x1b[0m\r\n'); };
+}
+function termFit(){ if(!fitAddon||!term)return; try{ fitAddon.fit(); }catch(e){}
+  if(ws&&ws.readyState===1) ws.send(JSON.stringify({resize:[term.cols,term.rows]})); sizeBurn(); }
+function sizeBurn(){ if(!bcv)return; const h=$('#termhost'); bcv.width=Math.max(2,h.clientWidth*DPR); bcv.height=Math.max(2,h.clientHeight*DPR); bctx.setTransform(DPR,0,0,DPR,0,0); }
+function cellSize(){ const s=$('#xterm').querySelector('.xterm-screen'); const el=s||$('#xterm');
+  return { w: el.clientWidth/(term.cols||80), h: el.clientHeight/(term.rows||24) }; }
+function burnStamp(d){ if(!crtOn||!term)return; const c=cellSize();
+  for(const ch of d){ if(ch.codePointAt(0)<32) continue;             // printable only
+    burns.push({ x:8+term.buffer.active.cursorX*c.w, y:6+(term.buffer.active.cursorY)*c.h, w:c.w, h:c.h, t:performance.now() });
+    if(burns.length>240) burns.shift(); } }
+function burnLoop(now){ requestAnimationFrame(burnLoop); if(!bctx)return;
+  bctx.clearRect(0,0,bcv.width,bcv.height);
+  if(!crtOn||!burns.length)return;
+  for(let i=burns.length-1;i>=0;i--){ const b=burns[i]; const age=(now-b.t)/1000;
+    if(age>=1){ burns.splice(i,1); continue; }
+    const a=(1-age); bctx.fillStyle='rgba(120,255,180,'+(0.42*a)+')'; bctx.fillRect(b.x,b.y,b.w,b.h);
+    bctx.fillStyle='rgba(180,255,210,'+(0.30*a)+')'; bctx.fillRect(b.x+b.w*0.18,b.y+b.h*0.12,b.w*0.64,b.h*0.72); } }
+function setTerm(mode){ termConnect(mode); uiBlip(); }
 $('#btnClaude').onclick=()=>setTerm('claude'); $('#btnShell').onclick=()=>setTerm('shell');
-$('#btnRestart').onclick=()=>{ $('#term').src='about:blank'; setTimeout(()=>setTerm(termMode),120); };
+$('#btnRestart').onclick=()=>{ termConnect(termMode); uiBlip(); };
 $('#btnFs').onclick=()=>toggleFs(mainId);
 $('#btnSound').onclick=()=>{ arm(); soundOn=!soundOn; applySound(); if(soundOn)uiBlip(); };
 $('#btnCrt').onclick=()=>{ crtOn=!crtOn; applyCrt(); uiBlip(); };
@@ -483,6 +527,39 @@ function drawGlobe(dt){
       gx.fillStyle='#46e88a';gx.font='10px monospace';gx.textAlign='left';gx.fillText('ISS',q[0]+7,q[1]+3);
       if(big) hitTargets.push({x:q[0],y:q[1],r:9,html:'<div class="nm">ISS · ZARYA</div><div class="ty">crewed station</div><div class="rw">altitude <b>~420 km</b></div><div class="rw">speed <b>27,600 km/h</b></div><div class="rw">position <b>'+S.iss.lat.toFixed(1)+'°, '+S.iss.lon.toFixed(1)+'°</b></div>'});} }
 
+  // ---- Hubble Space Telescope (real TLE, propagated like the sat swarm) ----
+  if(S.hubble && S.hubble.r){ const h=S.hubble;
+    if(!window._hst || _hst.src!==h){ window._hst={src:h, r:h.r, e:h.e||0, inc:h.inc*D2R, raan:h.raan*D2R, argp:h.argp*D2R, M0:h.ma*D2R, n:(h.mm*TAU/86400)*120}; }
+    const wp=satPos(_hst,T); const p=view(wp); const q=[CX+p[0]*R*zoom,CY-p[1]*R*zoom];
+    const front=p[2]>0 || (p[0]*p[0]+p[1]*p[1])>=0.99;
+    if(front){ const pulse=0.55+0.45*Math.sin(T*2.2);
+      gx.strokeStyle='rgba(245,209,40,'+pulse+')';gx.fillStyle='rgba(245,209,40,0.5)';gx.lineWidth=1.4;
+      gx.beginPath();gx.arc(q[0],q[1],4.5,0,TAU);gx.stroke();
+      gx.beginPath();gx.moveTo(q[0]-7,q[1]);gx.lineTo(q[0]+7,q[1]);gx.moveTo(q[0],q[1]-7);gx.lineTo(q[0],q[1]+7);gx.stroke();
+      gx.fillStyle='#f5d128';gx.font='10px monospace';gx.textAlign='left';gx.fillText('HST',q[0]+8,q[1]+3);
+      if(big) hitTargets.push({x:q[0],y:q[1],r:10,html:'<div class="nm">HUBBLE · HST</div><div class="ty">space telescope · 1990</div><div class="rw">altitude <b>'+h.alt.toLocaleString()+' km</b></div><div class="rw">inclination <b>'+h.inc.toFixed(1)+'°</b></div><div class="rw">orbits/day <b>'+h.mm.toFixed(2)+'</b></div>'}); } }
+
+  // ---- live aurora oval (scales with real Kp) ----
+  { const sw=S.spaceweather, kp=sw&&sw.kp!=null?sw.kp:0;
+    if(kp>=2){ const colat=(90-(67-kp*2.0))*Math.PI/180;   // ring shrinks toward pole as Kp rises
+      const al=clamp((kp-2)/6,0.08,0.6);
+      for(const pole of [1,-1]){ gx.strokeStyle='rgba(70,232,138,'+al+')';gx.lineWidth=2;gx.beginPath();let st=false;
+        for(let lo=0;lo<=360;lo+=10){ const la=pole*(90-colat*180/Math.PI); const e=earthVec(la,lo); const p=view([e[0]*1.02,e[1]*1.02,e[2]*1.02]);
+          if(p[2]<=0){st=false;continue;} const q=[CX+p[0]*R*zoom,CY-p[1]*R*zoom]; st?gx.lineTo(q[0],q[1]):gx.moveTo(q[0],q[1]);st=true; }
+        gx.stroke(); } } }
+
+  // ---- live earthquake pulses (USGS) — expanding ripples at epicenters ----
+  if(big){ const qs=S.quakes||[]; const nowS=Date.now()/1000;
+    for(const Q of qs){ const e=earthVec(Q.lat,Q.lon); const p=view([e[0]*1.005,e[1]*1.005,e[2]*1.005]);
+      if(p[2]<=0) continue; const q=[CX+p[0]*R*zoom,CY-p[1]*R*zoom];
+      const age=nowS-Q.t; const phase=(performance.now()/1000+Q.lon)%2.2/2.2;   // staggered ripple
+      const baseR=clamp(Q.mag*2.2,3,18), rr=baseR*(0.4+phase);
+      const fade=clamp(1-age/86400,0.12,1)*(1-phase);
+      const col=Q.mag>=5?'255,59,59':Q.mag>=3?'245,209,40':'70,232,138';
+      gx.strokeStyle='rgba('+col+','+(0.5*fade)+')';gx.lineWidth=1.3;gx.beginPath();gx.arc(q[0],q[1],rr*zoom,0,TAU);gx.stroke();
+      gx.fillStyle='rgba('+col+','+(0.8*fade)+')';gx.beginPath();gx.arc(q[0],q[1],1.7,0,TAU);gx.fill();
+      if(Q.mag>=4.5) hitTargets.push({x:q[0],y:q[1],r:Math.max(7,rr),html:'<div class="nm">M'+Q.mag.toFixed(1)+' EARTHQUAKE</div><div class="ty">USGS · seismic event</div><div class="rw">'+Q.place+'</div><div class="rw">depth <b>'+Q.depth+' km</b></div>'}); } }
+
   // ---- NEO asteroids: real NASA data, individual 3D orbits, varied directions ----
   const neo=S.neo||[]; gx.textAlign='left';
   const step = big?1:6;                                  // fewer when minimized
@@ -620,24 +697,41 @@ function onStats(){ pushH('cpu',S.cpu);pushH('mem',S.mem);pushH('disk',S.disk);
 }
 function clock(){ $('#clock').textContent=new Date().toTimeString().slice(0,8)+'Z'; }
 
-/* ============ COSMIC READOUT (Kardashev + universe age, always ticking) ============ */
+/* ============ DEEP-SPACE TELEMETRY READOUT (rotating, always changing) ============ */
 const COSMIC_BOOT=Date.now();
-// Universe age in seconds is ~4.35e17 — past JS's safe-integer limit — so use BigInt
-// for exact arithmetic; otherwise +1/sec gets swallowed by float rounding (digits freeze).
+// Universe age in seconds is ~4.35e17 — past JS's safe-integer limit — so use BigInt.
 const UNIV_AGE_S0=13797000000n*31557600n;              // 13.797 Gyr × Julian year (s), exact
+const AU=149597870.7, C_KMS=299792.458, T0=Date.UTC(2026,0,1)/1000;   // deep-space reference epoch
+// Reference distance (AU) at T0 + recession rate (km/s), from published 2026 ephemerides.
+const FLEET=[
+  {n:'VOYAGER 1', au0:167.1, kms:16.95, tag:'interstellar · 1977'},
+  {n:'VOYAGER 2', au0:139.2, kms:15.34, tag:'interstellar · 1977'},
+  {n:'NEW HORIZONS', au0:60.3, kms:13.77, tag:'kuiper belt · 2006'},
+  {n:'PIONEER 10', au0:135.0, kms:11.95, tag:'silent · 1972'}];
+function fleetDist(o){ return o.au0 + o.kms*(Date.now()/1000-T0)/AU; }   // AU, live
+function lighthrs(au){ return (au*AU/C_KMS/3600); }
+function fmtCountdown(ms){ const s=Math.abs(Math.floor(ms/1000)), d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),ss=s%60;
+  const pad=n=>String(n).padStart(2,'0'); return (d>0?d+'d ':'')+pad(h)+':'+pad(m)+':'+pad(ss); }
 let cosmicMode=0, cosmicSwap=0;
+const COSMIC_N=4+FLEET.length;   // kardashev, universe-age, hubble, launch + fleet
 function cosmicTick(){ const el=$('#cosmic'); if(!el)return;
   const t=(Date.now()-COSMIC_BOOT)/1000;
-  if(performance.now()-cosmicSwap>7000){ cosmicMode^=1; cosmicSwap=performance.now(); }
-  if(cosmicMode===0){                                   // Kardashev civilization type — shimmering low digits
-    const K=0.728140 + t*2e-9 + (Math.random()-0.5)*5e-6;
-    el.innerHTML='<span class="cl">CIVILIZATION · KARDASHEV</span><br><span class="cv">TYPE '+K.toFixed(6)+' ▲</span>';
-  } else {                                              // age of the universe, ticking up in seconds.
-    // Fold in the live Unix epoch so the low ~10 digits are populated and change every second
-    // (a round 13.797 Gyr alone trails off in zeros and looks fake).
-    const s=UNIV_AGE_S0+BigInt(Math.floor(Date.now()/1000));   // exact, ticks every second
-    el.innerHTML='<span class="cl">UNIVERSE AGE · SINCE BIG BANG</span><br><span class="cv">'+s.toLocaleString('en-US')+' s ▲</span>';
-  } }
+  if(performance.now()-cosmicSwap>5500){ cosmicMode=(cosmicMode+1)%COSMIC_N; cosmicSwap=performance.now(); }
+  const set=(l,v)=>{ el.innerHTML='<span class="cl">'+l+'</span><br><span class="cv">'+v+'</span>'; };
+  let m=cosmicMode;
+  if(m===0){ const K=0.728140 + t*2e-9 + (Math.random()-0.5)*5e-6;
+    set('CIVILIZATION · KARDASHEV','TYPE '+K.toFixed(6)+' ▲'); }
+  else if(m===1){ const s=UNIV_AGE_S0+BigInt(Math.floor(Date.now()/1000));
+    set('UNIVERSE AGE · SINCE BIG BANG',s.toLocaleString('en-US')+' s ▲'); }
+  else if(m===2){ const h=S.hubble;
+    set('HUBBLE · HST','ALT '+(h?h.alt.toLocaleString():'—')+' km · '+(h?(h.mm*1).toFixed(2):'—')+' orbits/day'); }
+  else if(m===3){ const L=S.launch;
+    if(L&&L.net){ const ms=new Date(L.net)-Date.now(); const lbl=ms>0?'T- '+fmtCountdown(ms):'T+ '+fmtCountdown(ms);
+      set('NEXT LAUNCH · '+lbl, (L.name||'').split('|')[0].trim().slice(0,30)); }
+    else set('NEXT LAUNCH','awaiting manifest…'); }
+  else { const o=FLEET[m-4]; const au=fleetDist(o);
+    set('DEEP SPACE · '+o.n, (au*AU).toLocaleString('en-US',{maximumFractionDigits:0})+' km · '+lighthrs(au).toFixed(1)+' lh ▲'); }
+}
 
 /* ============ HEAVY CRT toggle + keypress phosphor flash ============ */
 let crtOn=localStorage.getItem('nervCrt')!=='0';
@@ -684,8 +778,8 @@ function bootSeq(){
 
 /* ============ BOOT (no init screen) ============ */
 function boot(){
-  applyScale(); applyCrt(); place(); setTerm('shell'); sizeGlobe(); buildMon(); buildMonBig(); layoutMon();
-  let rsz; window.addEventListener('resize',()=>{ clearTimeout(rsz); rsz=setTimeout(()=>{ sizeGlobe(); layoutMon(); sizeBig(); },120); });   // debounced
+  applyScale(); applyCrt(); place(); initTerm(); sizeGlobe(); buildMon(); buildMonBig(); layoutMon();
+  let rsz; window.addEventListener('resize',()=>{ clearTimeout(rsz); rsz=setTimeout(()=>{ sizeGlobe(); layoutMon(); sizeBig(); termFit(); },120); });   // debounced
   todoLoad(); poll(); setInterval(poll,1500); setInterval(clock,1000); clock(); setInterval(todoLoad,5000);
   cosmicTick(); setInterval(cosmicTick,160);
   requestAnimationFrame(frame);

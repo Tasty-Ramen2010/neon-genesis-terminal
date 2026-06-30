@@ -11,6 +11,7 @@ spawn per-request work). Endpoints:
 """
 import http.server, socketserver, json, subprocess, threading, time, os, sys, re, math
 import urllib.request
+import pty, select, struct, base64, hashlib, fcntl, termios, signal
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("NERV_PORT", "8731"))
@@ -47,6 +48,83 @@ def get_json(url, timeout=6):
             return json.loads(r.read().decode())
     except Exception:
         return None
+
+# ---------------- WebSocket <-> PTY terminal (stdlib only; replaces ttyd) ----------------
+_WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+def _ws_accept(key): return base64.b64encode(hashlib.sha1((key+_WS_MAGIC).encode()).digest()).decode()
+def _recvn(conn, n):
+    buf = b""
+    while len(buf) < n:
+        try: chunk = conn.recv(n-len(buf))
+        except Exception: return None
+        if not chunk: return None
+        buf += chunk
+    return buf
+def _ws_send(conn, data, opcode=2):
+    hdr = bytearray([0x80|opcode]); n = len(data)
+    if n < 126: hdr.append(n)
+    elif n < 65536: hdr.append(126); hdr += struct.pack(">H", n)
+    else: hdr.append(127); hdr += struct.pack(">Q", n)
+    try: conn.sendall(bytes(hdr)+data)
+    except Exception: pass
+def _ws_recv(conn):
+    """Return (opcode, payload) or None on close/error."""
+    h = _recvn(conn, 2)
+    if not h: return None
+    opcode = h[0] & 0x0f; masked = h[1] & 0x80; ln = h[1] & 0x7f
+    if ln == 126: ext = _recvn(conn, 2);  ln = struct.unpack(">H", ext)[0] if ext else 0
+    elif ln == 127: ext = _recvn(conn, 8); ln = struct.unpack(">Q", ext)[0] if ext else 0
+    mask = _recvn(conn, 4) if masked else b"\x00\x00\x00\x00"
+    if mask is None: return None
+    payload = bytearray(_recvn(conn, ln) or b"")
+    if masked:
+        for i in range(len(payload)): payload[i] ^= mask[i & 3]
+    return opcode, bytes(payload)
+
+def pty_bridge(conn, mode):
+    """Spawn a login shell (or Claude) on a PTY and bridge it to the websocket.
+    Client protocol: BINARY frames = keystrokes -> PTY; TEXT frames = control JSON
+    ({"resize":[cols,rows]}). Server -> client: BINARY frames of terminal output."""
+    launch = "term-launch" if mode == "claude" else "shell-launch"
+    master, slave = pty.openpty()
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"; env["NERV_PROJECT"] = PROJECT; env["COLORTERM"] = "truecolor"
+    try:
+        proc = subprocess.Popen(["/bin/zsh", os.path.join(HERE, launch)],
+            stdin=slave, stdout=slave, stderr=slave, cwd=PROJECT, env=env,
+            preexec_fn=os.setsid, close_fds=True)
+    except Exception:
+        os.close(master); os.close(slave); return
+    os.close(slave)
+    try:
+        while True:
+            r, _, _ = select.select([master, conn], [], [], 30)
+            if master in r:
+                try: data = os.read(master, 65536)
+                except OSError: break
+                if not data: break
+                _ws_send(conn, data, opcode=2)
+            if conn in r:
+                frame = _ws_recv(conn)
+                if frame is None: break
+                opcode, payload = frame
+                if opcode == 0x8: break                       # close
+                elif opcode == 0x9: _ws_send(conn, payload, opcode=0xA)   # ping->pong
+                elif opcode == 0x1:                            # text = control
+                    try:
+                        msg = json.loads(payload.decode("utf-8", "ignore"))
+                        if "resize" in msg:
+                            cols, rows = int(msg["resize"][0]), int(msg["resize"][1])
+                            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+                    except Exception: pass
+                elif opcode == 0x2:                            # binary = keystrokes
+                    try: os.write(master, payload)
+                    except OSError: break
+    finally:
+        try: os.close(master)
+        except Exception: pass
+        try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception: pass
 
 def default_iface():
     for line in sh(["route", "-n", "get", "default"]).splitlines():
@@ -97,6 +175,9 @@ class Sampler(threading.Thread):
         self.conns = []
         self.spaceweather = None
         self.sats = []       # real satellites (orbital elements from Celestrak TLE)
+        self.hubble = None   # Hubble Space Telescope orbital elements (Celestrak)
+        self.quakes = []     # live USGS earthquakes
+        self.launch = None   # next upcoming orbital launch (Launch Library 2)
 
     def cpu(self):
         for line in sh(["top","-l","1","-n","0"]).splitlines():
@@ -251,6 +332,43 @@ class Sampler(threading.Thread):
                     n+=1
                 except Exception: pass
         if out: self.sats=out
+    def fetch_hubble(self):
+        # Hubble Space Telescope (NORAD 20580) orbital elements for a tracked marker
+        MU=398600.4418; RE=6371.0
+        try:
+            req=urllib.request.Request("https://celestrak.org/NORAD/elements/gp.php?CATNR=20580&FORMAT=tle",headers={"User-Agent":"NERV/1.0"})
+            with urllib.request.urlopen(req,timeout=8) as r: lines=r.read().decode(errors="ignore").splitlines()
+            l2=lines[2]
+            inc=float(l2[8:16]); raan=float(l2[17:25]); ecc=float("0."+l2[26:33].strip())
+            argp=float(l2[34:42]); ma=float(l2[43:51]); mm=float(l2[52:63])
+            nrad=mm*2*math.pi/86400.0; a=(MU/(nrad*nrad))**(1.0/3.0)
+            self.hubble={"n":"HST","inc":inc,"raan":raan,"e":ecc,"argp":argp,"ma":ma,"mm":mm,
+                         "r":round(a/RE,4),"alt":round(a-RE)}
+        except Exception: pass
+    def fetch_quakes(self):
+        # live earthquakes (past day) from USGS
+        j=get_json("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson", timeout=8)
+        if not j or "features" not in j: return
+        out=[]
+        for f in j["features"][:80]:
+            try:
+                c=f["geometry"]["coordinates"]; p=f["properties"]
+                m=p.get("mag")
+                if m is None: continue
+                out.append({"lon":c[0],"lat":c[1],"mag":round(float(m),1),
+                            "depth":round(c[2]),"place":(p.get("place") or "")[:40],"t":int(p.get("time",0))//1000})
+            except Exception: pass
+        out.sort(key=lambda q:q["t"], reverse=True)
+        self.quakes=out[:60]
+    def fetch_launch(self):
+        # next upcoming orbital launch (Launch Library 2, keyless)
+        j=get_json("https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=1&mode=list", timeout=8)
+        try:
+            r=j["results"][0]
+            self.launch={"name":r.get("name",""),"net":r.get("net",""),
+                         "provider":(r.get("launch_service_provider") or {}).get("name","") if isinstance(r.get("launch_service_provider"),dict) else (r.get("provider") or ""),
+                         "pad":(r.get("pad") or {}).get("name","") if isinstance(r.get("pad"),dict) else ""}
+        except Exception: pass
     def fetch_iss(self):
         j=get_json("http://api.open-notify.org/iss-now.json", timeout=5)   # fast, keyless, works here
         if j and j.get("iss_position"):
@@ -315,6 +433,15 @@ class Sampler(threading.Thread):
                 if c==5 or c%2400==40:   # seed early, then ~ every hour (TLE changes slowly)
                     try: self.fetch_sats()
                     except Exception: pass
+                if c==6 or c%2400==46:   # Hubble TLE — slow-changing, ~ hourly
+                    try: self.fetch_hubble()
+                    except Exception: pass
+                if c==7 or c%120==55:    # earthquakes — ~ every 3 min
+                    try: self.fetch_quakes()
+                    except Exception: pass
+                if c==8 or c%600==70:    # next launch — ~ every 15 min
+                    try: self.fetch_launch()
+                    except Exception: pass
                 snap={"ready":True,"t":time.time(),"cpu":round(cpu,1),"ncpu":self.ncpu,
                     "mem":mempct,"mem_used":memu,"mem_total":memt,
                     "net_down":round(down),"net_up":round(up),"iface":self.iface,
@@ -325,7 +452,8 @@ class Sampler(threading.Thread):
                     "conns":self.conns,"conn_count":len(self.conns),
                     "net_procs":netprocs,"mem_detail":memd,
                     "iss":self.iss,"neo":self.neo,
-                    "spaceweather":self.spaceweather,"sats":self.sats}
+                    "spaceweather":self.spaceweather,"sats":self.sats,
+                    "hubble":self.hubble,"quakes":self.quakes,"launch":self.launch}
                 with _lock: _stats.clear(); _stats.update(snap)
             except Exception as e:
                 with _lock: _stats["error"]=str(e)
@@ -337,7 +465,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("Content-Type",ctype)
         self.send_header("Cache-Control","no-store"); self.end_headers()
         self.wfile.write(body if isinstance(body,bytes) else body.encode())
+    def _send_static(self):
+        name=os.path.basename(self.path.split("?",1)[0])
+        path=os.path.join(HERE,"vendor",name)
+        ct={"js":"application/javascript","css":"text/css"}.get(name.rsplit(".",1)[-1],"text/plain")
+        try:
+            with open(path,"rb") as f: data=f.read()
+            self.send_response(200); self.send_header("Content-Type",ct+"; charset=utf-8")
+            self.send_header("Cache-Control","max-age=86400"); self.end_headers(); self.wfile.write(data)
+        except Exception: self._send(404,"not found","text/plain")
+    def _pty_ws(self):
+        key=self.headers.get("Sec-WebSocket-Key")
+        if not key: self._send(400,"bad ws","text/plain"); return
+        from urllib.parse import urlparse, parse_qs
+        mode=(parse_qs(urlparse(self.path).query).get("mode",["shell"])[0])
+        # Write the 101 handshake by hand as HTTP/1.1 — browsers reject a WebSocket
+        # upgrade over BaseHTTPRequestHandler's default HTTP/1.0.
+        resp=("HTTP/1.1 101 Switching Protocols\r\n"
+              "Upgrade: websocket\r\n""Connection: Upgrade\r\n"
+              "Sec-WebSocket-Accept: "+_ws_accept(key)+"\r\n\r\n")
+        try: self.wfile.write(resp.encode()); self.wfile.flush()
+        except Exception: return
+        pty_bridge(self.connection, mode)
     def do_GET(self):
+        if self.path.startswith("/pty") and self.headers.get("Upgrade","").lower()=="websocket":
+            self._pty_ws(); return
+        if self.path.startswith("/vendor/"):
+            self._send_static(); return
         if self.path.startswith("/stats"):
             with _lock: self._send(200,json.dumps(_stats),"application/json")
         elif self.path.startswith("/todo"):

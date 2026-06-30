@@ -55,12 +55,12 @@ start_shell(){ shell_up && return 0; NERV_PROJECT="$PROJECT" ttyd "${TTYD_OPTS[@
 stop_stats(){ [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null; rm -f "$PIDFILE"; pkill -f "NERV_PORT=$PORT.*nerv-server.py" 2>/dev/null; }
 stop_term(){ for pf in "$TPIDFILE" "$SPIDFILE"; do [ -f "$pf" ] && kill "$(cat "$pf")" 2>/dev/null; rm -f "$pf"; done
   pkill -f "ttyd .*-p $TPORT" 2>/dev/null; pkill -f "ttyd .*-p $SPORT" 2>/dev/null; }
-wait_up(){ for i in $(seq 1 30); do stats_up && term_up && shell_up && return 0; sleep 0.2; done; }
+wait_up(){ for i in $(seq 1 30); do stats_up && return 0; sleep 0.2; done; }   # terminal is in-server now (no ttyd)
 
 case "${1:-up}" in
   stop)        stop_term; stop_stats; echo "NERV console stopped (port $PORT)"; exit 0;;
-  stop-term)   stop_term; echo "terminals stopped"; exit 0;;
-  restart-term) stop_term; sleep 0.4; start_term; start_shell; echo "terminals restarted"; exit 0;;
+  stop-term)   stop_term; echo "(legacy ttyd cleared; the terminal now lives in the server — use ⟳ RESTART in-app)"; exit 0;;
+  restart-term) echo "the terminal is now in-server — use the ⟳ RESTART button in the console"; exit 0;;
   kill)        stop_term; stop_stats; pkill -9 -f "nerv-server.py" 2>/dev/null
                pkill -9 -f "ttyd .*-p $TPORT" 2>/dev/null; pkill -9 -f "ttyd .*-p $SPORT" 2>/dev/null
                pkill -9 -x afplay 2>/dev/null; echo "hard-stopped all NERV + cleared audio"; exit 0;;
@@ -68,12 +68,12 @@ case "${1:-up}" in
                stats_up && echo "stats: UP" || echo "stats: down"; term_up && echo "claude: UP" || echo "claude: down"; shell_up && echo "shell: UP" || echo "shell: down"; exit 0;;
   ports)       find_free_base || { echo "no free ports"; exit 1; }; exit 0;;   # print a free {stats ttyd shell} triplet
   term)        if [ -d "/Applications/cool-retro-term.app" ]; then open -na cool-retro-term; else open -a Terminal; fi; exit 0;;
-  serve)       start_stats; start_term; start_shell; wait_up
+  serve)       start_stats; wait_up
                stats_up || { echo "stats failed"; tail -4 "$LOG"; }
-               echo "NERV services up (stats:$PORT term:$TPORT shell:$SPORT)"; exit 0;;
+               echo "NERV services up (stats:$PORT · terminal in-server)"; exit 0;;
 esac
 
-start_stats; start_term; start_shell; wait_up
+start_stats; wait_up
 if [ -d "/Applications/Google Chrome.app" ]; then open -na "Google Chrome" --args --app="$URL" --window-size=1700,1050 >/dev/null 2>&1
 else open "$URL"; fi
 echo "NERV console -> $URL   (project: $PROJECT · stop: NERV_PORT=$PORT nerv-dash stop)"
