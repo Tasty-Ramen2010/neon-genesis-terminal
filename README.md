@@ -4,7 +4,9 @@
 
 ### A live, Evangelion / NERV-themed mission console for macOS — your terminal, wrapped in a geocentric near-earth-object tracker.
 
-`real NASA asteroid data` · `1,300+ live satellites` · `day/night earth` · `space weather` · `embedded Claude Code`
+`real NASA asteroids` · `1,300+ live satellites` · `day/night earth` · `space weather` · `cosmic telemetry` · `embedded terminal`
+
+![NEON GENESIS TERMINAL — live demo](screenshots/demo.gif)
 
 ![NEON GENESIS TERMINAL — main console](screenshots/dashboard.png)
 
@@ -37,17 +39,24 @@ It's inspired by the "SENTRY: Near Earth Object Encounters" geocentric displays 
 ### 🛰 Space weather (NOAA SWPC)
 Planetary K-index gauge, solar-wind speed & proton density, IMF Bz, geomagnetic storm level (QUIET → SEVERE), and an aurora-likelihood alert — straight from DSCOVR/ACE.
 
+### 🛸 Cosmic telemetry
+A header readout that's never the same twice — rotates between your civilization's live **Kardashev type** (`TYPE 0.728140 ▲`, low digits shimmering) and the **age of the universe** ticking up second by second since the Big Bang. Computed client-side, no API.
+
 ### 🖥 Embedded terminal
-A real `ttyd` terminal in the main panel running **Claude Code** by default, with a one-click toggle to a plain shell. The whole thing is a terminal you happen to be flying.
+A real `ttyd` terminal in the main panel. Opens a **plain shell** by default; one click toggles it to **Claude Code** (if `claude` is installed). The whole console is a terminal you happen to be flying.
 
 ### 📊 System monitor & network feed
 btop-style CPU/MEM/NET/disk graphs, a live per-process bandwidth meter (iftop-style), and a streaming log of every outbound network connection your machine makes.
 
+### 🟢 Heavy-CRT mode
+Phosphor bloom, a rolling refresh-sweep, gentle flicker, chromatic fringing on labels, and a keypress flash — toggle it with the `▦ CRT` button (your choice is remembered). Dial it off any time for crisp readability.
+
 ### ✦ Mission extras
 - **MAGI directive list** — a persistent to-do panel (MELCHIOR · BALTHASAR · CASPER).
 - **Cinematic boot sequence** — a skippable NERV/MAGI bring-up on launch.
+- **Run several at once** — each window auto-picks free ports, so you can fly one console per project (`nerv-dash new ~/some/project`).
 - **Web-Audio sound design** — subtle UI blips and alarms (no per-event process spawning; one `AudioContext`).
-- **Amber-phosphor CRT theme** with scanlines and vignette.
+- **Hex-MAGI app icon** — a glowing three-hex MAGI core with a terminal cursor.
 
 ---
 
@@ -107,26 +116,53 @@ http://127.0.0.1:8731/  ──  nerv-server.py  (Python stdlib only)
 nerv-dashboard.html  (vanilla JS + Canvas 2D, one self-contained file)
         │  embeds
         ▼
-ttyd :7682 (Claude)   +   ttyd :7683 (shell)   as <iframe>s
+ttyd :7682 (shell/Claude)  +  ttyd :7683 (shell)   as <iframe>s
 ```
 
-- **`nerv-dash`** — the launcher: `serve`, `stop`, `restart-term`, `status`, `kill`, …
+- **`nerv-dash`** — the launcher (see the command reference below).
 - **`nerv-server.py`** — backend. All external fetches happen on a timer in one thread and are cached; the render loop and HTTP polling never trigger per-request work.
 - **`nerv-dashboard.html`** — the entire frontend. Panels swap via CSS grid-area reassignment, so the terminal iframe never reloads when you rearrange the deck.
 - The render loop throttles to ~30fps and pauses entirely when the window is hidden.
+- **Multiple instances:** each window asks `nerv-dash` for a free `{stats, ttyd, shell}` port triplet (8731/7682/7683, then +10 each), and the server injects those ports into its page — so consoles never collide.
 
 ---
 
-## Controls
+## Commands
+
+Everything is driven by **`nerv-dash`** (installed to `~/.local/bin`). The native app calls it for you, but you can use it directly too:
+
+| Command | What it does |
+|---------|--------------|
+| `nerv-dash` | Start services + open the console in your browser (default ports) |
+| `nerv-dash new [DIR]` | **New instance** on auto-picked free ports, project root = `DIR` (or `$PWD`). Run it per project. |
+| `nerv-dash serve` | Start services only, no browser (this is what `NERV.app` runs) |
+| `nerv-dash status` | Show what's running on the active ports |
+| `nerv-dash restart-term` | Restart just the embedded terminals |
+| `nerv-dash stop` | Stop this instance (the one on `$NERV_PORT`, default 8731) |
+| `nerv-dash kill` | Panic: hard-stop everything + clear stray audio |
+| `nerv-dash ports` | Print the next free `{stats ttyd shell}` triplet |
+| `open /Applications/NERV.app` | Launch the native app (open it again for a second window/instance) |
+
+**Environment overrides** (for manual control): `NASA_API_KEY`, `NERV_PORT`, `NERV_TTYD_PORT`, `NERV_SHELL_PORT`, `NERV_PROJECT`.
+
+```bash
+# one console per project, all at once:
+nerv-dash new ~/code/api      # → ports 8731/7682/7683
+nerv-dash new ~/code/frontend # → ports 8741/7692/7693
+```
+
+## Controls (in-app)
 
 | Action | How |
 |--------|-----|
 | Make a panel the main view | double-click it, or use the `VIEW` bar |
 | Fullscreen a panel | `⤢` button / double-click its title / `Esc` to exit |
 | Orbit / zoom the globe | drag / scroll (when it's the main view) |
-| Identify an object | hover it |
-| Toggle Claude ↔ shell | `CLAUDE` / `SHELL` in the bar |
+| Identify an object (asteroid, sat, ISS, Sun…) | hover it |
+| Toggle shell ↔ Claude Code | `SHELL` / `CLAUDE` in the bar (opens a **shell** by default) |
+| Toggle heavy-CRT mode | `▦ CRT` (remembered across launches) |
 | Mute sound | `♪ SOUND` |
+| Resize UI | `A−` / `A+` |
 | Skip the boot sequence | click / any key |
 
 ---

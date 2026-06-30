@@ -1,50 +1,79 @@
 #!/usr/bin/env bash
-# nerv-dash — control the NERV console (Claude terminal + graphical visuals).
-#   nerv-dash                start services + open in browser
-#   nerv-dash serve          start services only (no browser; used by NERV.app)
-#   nerv-dash term           open a standalone cool-retro-term terminal
-#   nerv-dash restart-term   restart ONLY the embedded Claude terminal
-#   nerv-dash stop-term      stop ONLY the embedded terminals
-#   nerv-dash stop           stop the whole console
-#   nerv-dash kill           hard-stop everything + clear stray audio (panic)
-#   nerv-dash status         show what's running
+# nerv-dash — control the NERV console (embedded terminal + live geocentric visuals).
+#
+#   nerv-dash                 start services + open in browser   (default ports)
+#   nerv-dash new [DIR]       NEW instance on auto-picked free ports, project = DIR (or $PWD)
+#   nerv-dash serve           start services only (no browser; used by NERV.app)
+#   nerv-dash term            open a standalone cool-retro-term terminal
+#   nerv-dash restart-term    restart ONLY the embedded terminals
+#   nerv-dash stop-term       stop ONLY the embedded terminals
+#   nerv-dash stop            stop this instance (the one on $NERV_PORT, default 8731)
+#   nerv-dash kill            hard-stop everything + clear stray audio (panic)
+#   nerv-dash status          show what's running on the active ports
+#
+# Multiple instances: each picks its own port triplet, so you can run one per
+# project at once. Override manually with NERV_PORT / NERV_TTYD_PORT / NERV_SHELL_PORT.
 set -uo pipefail
 DIR="$HOME/.config/nerv-theme/dashboard"
+
+port_in_use(){ lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+# find a free {stats ttyd shell} triplet: 8731/7682/7683, then +10 each step
+find_free_base(){ local i s t h; for i in $(seq 0 20); do
+    s=$((8731+i*10)); t=$((7682+i*10)); h=$((7683+i*10))
+    if ! port_in_use "$s" && ! port_in_use "$t" && ! port_in_use "$h"; then echo "$s $t $h"; return 0; fi
+  done; return 1; }
+
+# 'new' allocates fresh ports BEFORE the port vars are fixed below
+if [ "${1:-}" = "new" ]; then
+  shift; read -r NERV_PORT NERV_TTYD_PORT NERV_SHELL_PORT < <(find_free_base) \
+    || { echo "no free port triplet found"; exit 1; }
+  export NERV_PORT NERV_TTYD_PORT NERV_SHELL_PORT
+  export NERV_PROJECT="${1:-$PWD}"
+  set -- up   # fall through to the normal start+open flow with these ports
+fi
+
 PORT="${NERV_PORT:-8731}"; TPORT="${NERV_TTYD_PORT:-7682}"; SPORT="${NERV_SHELL_PORT:-7683}"
 PROJECT="${NERV_PROJECT:-$PWD}"; URL="http://127.0.0.1:$PORT/"
 # NASA key: pass through env if set; otherwise nerv-server.py reads ~/.config/nerv-theme/config.json,
 # then falls back to DEMO_KEY. Never hardcode a personal key here (this file is public).
 [ -n "${NASA_API_KEY:-}" ] && export NASA_API_KEY
-PIDFILE="${TMPDIR:-/tmp}/nerv-dash.pid"; TPIDFILE="${TMPDIR:-/tmp}/nerv-ttyd.pid"; SPIDFILE="${TMPDIR:-/tmp}/nerv-shell.pid"
+# pid/log files are keyed by port so instances never clobber each other
+T="${TMPDIR:-/tmp}"; PIDFILE="$T/nerv-dash-$PORT.pid"; TPIDFILE="$T/nerv-ttyd-$TPORT.pid"; SPIDFILE="$T/nerv-shell-$SPORT.pid"
+LOG="$T/nerv-dash-$PORT.log"
 
 stats_up(){ curl -s "http://127.0.0.1:$PORT/ping" >/dev/null 2>&1; }
 term_up(){ curl -s -o /dev/null "http://127.0.0.1:$TPORT/" 2>/dev/null; }
 shell_up(){ curl -s -o /dev/null "http://127.0.0.1:$SPORT/" 2>/dev/null; }
 TTYD_OPTS=(-W -i 127.0.0.1 -m 6 -t fontSize=15 -t 'fontFamily=SF Mono,Menlo,monospace' -t cursorBlink=true -t scrollback=5000 \
   -t 'theme={"background":"#04070b","foreground":"#a8f5c8","cursor":"#39ff86","selectionBackground":"#1f4a3a","brightBlack":"#5c7378"}')
-start_stats(){ stats_up && return 0; NERV_PORT="$PORT" NERV_PROJECT="$PROJECT" python3 "$DIR/nerv-server.py" >/tmp/nerv-dash.log 2>&1 & echo $! >"$PIDFILE"; }
-start_term(){ term_up && return 0; NERV_PROJECT="$PROJECT" ttyd "${TTYD_OPTS[@]}" -p "$TPORT" "$DIR/term-launch" >/tmp/nerv-ttyd.log 2>&1 & echo $! >"$TPIDFILE"; }
-start_shell(){ shell_up && return 0; NERV_PROJECT="$PROJECT" ttyd "${TTYD_OPTS[@]}" -p "$SPORT" "$DIR/shell-launch" >/tmp/nerv-shell.log 2>&1 & echo $! >"$SPIDFILE"; }
-stop_stats(){ [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null; rm -f "$PIDFILE"; pkill -f "$DIR/nerv-server.py" 2>/dev/null; }
+start_stats(){ stats_up && return 0
+  NERV_PORT="$PORT" NERV_TTYD_PORT="$TPORT" NERV_SHELL_PORT="$SPORT" NERV_PROJECT="$PROJECT" \
+    python3 "$DIR/nerv-server.py" >"$LOG" 2>&1 & echo $! >"$PIDFILE"; }
+# run the launch scripts via zsh explicitly so a missing exec-bit can never cause "permission denied"
+start_term(){ term_up && return 0; NERV_PROJECT="$PROJECT" ttyd "${TTYD_OPTS[@]}" -p "$TPORT" /bin/zsh "$DIR/term-launch" >"$T/nerv-ttyd-$TPORT.log" 2>&1 & echo $! >"$TPIDFILE"; }
+start_shell(){ shell_up && return 0; NERV_PROJECT="$PROJECT" ttyd "${TTYD_OPTS[@]}" -p "$SPORT" /bin/zsh "$DIR/shell-launch" >"$T/nerv-shell-$SPORT.log" 2>&1 & echo $! >"$SPIDFILE"; }
+stop_stats(){ [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null; rm -f "$PIDFILE"; pkill -f "NERV_PORT=$PORT.*nerv-server.py" 2>/dev/null; }
 stop_term(){ for pf in "$TPIDFILE" "$SPIDFILE"; do [ -f "$pf" ] && kill "$(cat "$pf")" 2>/dev/null; rm -f "$pf"; done
   pkill -f "ttyd .*-p $TPORT" 2>/dev/null; pkill -f "ttyd .*-p $SPORT" 2>/dev/null; }
 wait_up(){ for i in $(seq 1 30); do stats_up && term_up && shell_up && return 0; sleep 0.2; done; }
 
 case "${1:-up}" in
-  stop)        stop_term; stop_stats; echo "NERV console stopped"; exit 0;;
+  stop)        stop_term; stop_stats; echo "NERV console stopped (port $PORT)"; exit 0;;
   stop-term)   stop_term; echo "terminals stopped"; exit 0;;
   restart-term) stop_term; sleep 0.4; start_term; start_shell; echo "terminals restarted"; exit 0;;
-  kill)        stop_term; stop_stats; pkill -9 -f "$DIR/nerv-server.py" 2>/dev/null
+  kill)        stop_term; stop_stats; pkill -9 -f "nerv-server.py" 2>/dev/null
                pkill -9 -f "ttyd .*-p $TPORT" 2>/dev/null; pkill -9 -f "ttyd .*-p $SPORT" 2>/dev/null
                pkill -9 -x afplay 2>/dev/null; echo "hard-stopped all NERV + cleared audio"; exit 0;;
-  status)      stats_up && echo "stats: UP" || echo "stats: down"; term_up && echo "claude: UP" || echo "claude: down"; shell_up && echo "shell: UP" || echo "shell: down"; exit 0;;
+  status)      echo "ports: stats $PORT · ttyd $TPORT · shell $SPORT"
+               stats_up && echo "stats: UP" || echo "stats: down"; term_up && echo "claude: UP" || echo "claude: down"; shell_up && echo "shell: UP" || echo "shell: down"; exit 0;;
+  ports)       find_free_base || { echo "no free ports"; exit 1; }; exit 0;;   # print a free {stats ttyd shell} triplet
   term)        if [ -d "/Applications/cool-retro-term.app" ]; then open -na cool-retro-term; else open -a Terminal; fi; exit 0;;
   serve)       start_stats; start_term; start_shell; wait_up
-               stats_up || { echo "stats failed"; tail -4 /tmp/nerv-dash.log; }
-               echo "NERV services up (stats:$PORT claude:$TPORT shell:$SPORT)"; exit 0;;
+               stats_up || { echo "stats failed"; tail -4 "$LOG"; }
+               echo "NERV services up (stats:$PORT term:$TPORT shell:$SPORT)"; exit 0;;
 esac
 
 start_stats; start_term; start_shell; wait_up
 if [ -d "/Applications/Google Chrome.app" ]; then open -na "Google Chrome" --args --app="$URL" --window-size=1700,1050 >/dev/null 2>&1
 else open "$URL"; fi
-echo "NERV console -> $URL   (stop: nerv-dash stop)"
+echo "NERV console -> $URL   (project: $PROJECT · stop: NERV_PORT=$PORT nerv-dash stop)"

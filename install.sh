@@ -73,8 +73,14 @@ TMP="$(mktemp -d)"
 swiftc -O -framework Cocoa -framework WebKit "$HERE/dashboard/nerv-app.swift" -o "$TMP/NERV" 2>/dev/null \
   || die "swiftc build failed (is Xcode Command Line Tools installed?)"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$TMP/NERV" "$APP/Contents/MacOS/NERV"
+# app icon (Hex MAGI core). Use the committed .icns; regenerate from source if Pillow is present.
+if [ -f "$HERE/tools/make-icon.py" ] && python3 -c "import PIL" >/dev/null 2>&1; then
+  python3 "$HERE/tools/make-icon.py" >/dev/null 2>&1 || true
+fi
+if [ -f "$HERE/NERV.icns" ]; then cp "$HERE/NERV.icns" "$APP/Contents/Resources/AppIcon.icns" && ok "app icon installed"
+else warn "NERV.icns not found — app will use the default icon"; fi
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -83,6 +89,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>NERV</string>
   <key>CFBundleIdentifier</key><string>com.nerv.console</string>
   <key>CFBundleExecutable</key><string>NERV</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
@@ -90,6 +97,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 codesign --force --deep --sign - "$APP" 2>/dev/null && ok "NERV.app built + signed (ad-hoc)" || warn "NERV.app built (codesign skipped)"
+touch "$APP"   # nudge Finder/Dock to refresh the icon
 rm -rf "$TMP"
 
 # ---- 5. NASA API key ----------------------------------------------------

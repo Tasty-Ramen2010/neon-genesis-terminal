@@ -22,7 +22,27 @@
   #tooltip .haz{color:var(--red); margin-top:2px; font-weight:700}
   #scan{z-index:80; opacity:.28; mix-blend-mode:multiply;
     background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.5) 3px,rgba(0,0,0,0) 4px)}
+  body.crt #scan{opacity:.34; animation:scanroll 9s linear infinite}
+  @keyframes scanroll{from{background-position:0 0}to{background-position:0 120px}}
   #vig{z-index:81; box-shadow:inset 0 0 220px 24px rgba(0,0,0,.6)}
+  /* heavy CRT: refresh sweep bar */
+  #crtbar{position:fixed; inset:0; z-index:82; pointer-events:none; opacity:0}
+  body.crt #crtbar{opacity:1; background:linear-gradient(180deg,rgba(180,255,210,0) 0%,rgba(180,255,210,.045) 47%,rgba(190,255,215,.11) 50%,rgba(180,255,210,.045) 53%,rgba(180,255,210,0) 100%);
+    background-size:100% 240px; background-repeat:no-repeat; animation:crtsweep 6.5s linear infinite}
+  @keyframes crtsweep{from{background-position:0 -240px}to{background-position:0 115vh}}
+  /* heavy CRT: subtle whole-screen flicker */
+  body.crt #crt{animation:crtflicker 5.5s steps(48) infinite}
+  @keyframes crtflicker{0%,100%{filter:saturate(1.14) contrast(1.06) brightness(1.03)}
+    47%{filter:saturate(1.16) contrast(1.07) brightness(1.05)}48%{filter:saturate(1.08) contrast(1.03) brightness(.985)}
+    50%{filter:saturate(1.2) contrast(1.09) brightness(1.07)}52%{filter:saturate(1.12) contrast(1.05) brightness(1.0)}}
+  /* heavy CRT: chromatic fringe on glowing labels (cheap, localized) */
+  body.crt header .logo, body.crt header .clock, body.crt .mod>.tab, body.crt #bootseq .bl{
+    text-shadow:0 0 7px currentColor, .8px 0 rgba(255,46,46,.32), -.8px 0 rgba(54,206,255,.28)}
+  /* keypress phosphor flash */
+  #kflash{position:fixed; inset:0; z-index:79; pointer-events:none; opacity:0;
+    background:radial-gradient(ellipse at center,rgba(130,255,190,.07),rgba(130,255,190,0) 62%)}
+  #kflash.on{animation:kf .2s ease-out}
+  @keyframes kf{0%{opacity:1}100%{opacity:0}}
 
   header{flex:0 0 auto; display:flex; align-items:center; gap:16px; padding:5px 13px;
     border:1px solid var(--amber2); border-radius:8px}
@@ -33,6 +53,10 @@
   header .spacer{flex:1}
   header .clock{color:var(--grn); font-size:18px; letter-spacing:2px; text-shadow:0 0 8px var(--grn)}
   header .mt{color:var(--amber); font-size:10px; text-align:right}
+  header .cosmic{font-size:10px; text-align:right; line-height:1.35; padding-right:12px; margin-right:10px;
+    border-right:1px solid var(--amber2); min-width:188px}
+  header .cosmic .cl{color:var(--dim2); letter-spacing:1px}
+  header .cosmic .cv{color:var(--cyan); letter-spacing:1px; text-shadow:0 0 7px rgba(63,224,224,.5); font-variant-numeric:tabular-nums}
 
   #deck{flex:1; display:grid; grid-template-columns:1.5fr 0.82fr; grid-template-rows:repeat(5,1fr); gap:6px; min-height:0}
   .mod{border:1px solid var(--amber2); border-radius:8px; position:relative; background:rgba(18,11,2,.14);
@@ -170,6 +194,7 @@
     <div class="stat">SRC <span class="g">JPL CNEOS · NASA SSD · SBDB</span><br>
       NEO <b id="hNeo">0</b> · LINKS <span class="c" id="hLinks">0</span> · ACTIVE SATS <span class="c" id="hSats">15,879</span></div>
     <div class="spacer"></div>
+    <div class="cosmic" id="cosmic"></div>
     <div class="mt">MISSION TIME · <span id="hostline">operator</span><br><span id="issline" style="color:var(--grn)">ISS ---</span></div>
     <div class="clock" id="clock">--:--:--</div>
   </header>
@@ -224,10 +249,12 @@
     <div class="spacer"></div>
     <span class="lbl">UI</span>
     <div class="btn" id="btnScaleDown">A−</div><div class="btn" id="btnScaleUp">A+</div>
+    <div class="btn on" id="btnCrt">▦ CRT</div>
     <div class="btn on" id="btnSound">♪ SOUND</div>
   </div>
 </div>
 <div id="scan" class="ovl"></div><div id="vig" class="ovl"></div>
+<div id="crtbar" class="ovl"></div><div id="kflash" class="ovl"></div>
 <div id="tooltip"></div>
 
 <div id="bootseq">
@@ -287,13 +314,14 @@ $$('.mod>.tab').forEach(t=>t.addEventListener('dblclick',()=>{ const id=t.parent
 window.addEventListener('keydown',e=>{ if(e.key==='Escape'&&fsId){fsId=null;place();} });
 
 /* ============ TERMINAL ============ */
-let termMode='claude';
+let termMode='shell';
 function setTerm(mode){ termMode=mode; $('#term').src='http://'+location.hostname+':'+(mode==='shell'?SPORT:TPORT)+'/';
   $('#termMode').textContent=mode.toUpperCase(); uiBlip(); }
 $('#btnClaude').onclick=()=>setTerm('claude'); $('#btnShell').onclick=()=>setTerm('shell');
 $('#btnRestart').onclick=()=>{ $('#term').src='about:blank'; setTimeout(()=>setTerm(termMode),120); };
 $('#btnFs').onclick=()=>toggleFs(mainId);
 $('#btnSound').onclick=()=>{ arm(); soundOn=!soundOn; applySound(); if(soundOn)uiBlip(); };
+$('#btnCrt').onclick=()=>{ crtOn=!crtOn; applyCrt(); uiBlip(); };
 
 /* ============ UI SCALE ============ */
 let scale=parseFloat(localStorage.getItem('nervScale')||'1');
@@ -304,6 +332,7 @@ $('#btnScaleDown').onclick=()=>{ scale=clamp(scale-0.05,0.6,1.6); applyScale(); 
 /* ============ GEOCENTRIC MAP — 3D near-earth scene ============ */
 const gc=$('#globe'),gx=gc.getContext('2d'); let GW=0,GH=0,CX=0,CY=0,R=0;
 let yaw=0.6, pitch=0.34, zoom=1, earthSpin=0, dragging=false, lastX=0,lastY=0, hitTargets=[];
+let crtBurn=false;   // phosphor burn-in trails on the globe canvas (mirrors the CRT toggle)
 function isGlobeBig(){ const m=$('#m_globe'); return m&&m.classList.contains('big'); }
 function sizeGlobe(){ const b=gc.parentElement.getBoundingClientRect(); GW=b.width;GH=b.height;
   gc.width=Math.max(2,GW*DPR);gc.height=Math.max(2,GH*DPR);gx.setTransform(DPR,0,0,DPR,0,0);
@@ -380,7 +409,10 @@ function drawGlobe(dt){
   const T=performance.now()/1000; const big=isGlobeBig();
   earthSpin += dt*8;                          // earth axial spin
   if(!big) yaw += dt*0.18;                     // gentle auto-rotate when small; user drives when big
-  gx.clearRect(0,0,GW,GH); hitTargets=[];
+  // CRT phosphor burn-in: fade the previous frame instead of clearing, so moving
+  // satellites/asteroids/the ISS leave glowing trails. Plain clear when CRT is off.
+  if(crtBurn){ gx.fillStyle='rgba(2,4,7,0.38)'; gx.fillRect(0,0,GW,GH); } else { gx.clearRect(0,0,GW,GH); }
+  hitTargets=[];
   for(const s of STARS){gx.fillStyle='rgba(150,150,160,'+(0.1+0.4*s[2])+')';gx.fillRect(s[0]*GW,s[1]*GH,1.2,1.2);}
 
   // ---- Sun (real declination) far along sunDir; earthSpin sweeps day/night ----
@@ -588,6 +620,33 @@ function onStats(){ pushH('cpu',S.cpu);pushH('mem',S.mem);pushH('disk',S.disk);
 }
 function clock(){ $('#clock').textContent=new Date().toTimeString().slice(0,8)+'Z'; }
 
+/* ============ COSMIC READOUT (Kardashev + universe age, always ticking) ============ */
+const COSMIC_BOOT=Date.now();
+// Universe age in seconds is ~4.35e17 — past JS's safe-integer limit — so use BigInt
+// for exact arithmetic; otherwise +1/sec gets swallowed by float rounding (digits freeze).
+const UNIV_AGE_S0=13797000000n*31557600n;              // 13.797 Gyr × Julian year (s), exact
+let cosmicMode=0, cosmicSwap=0;
+function cosmicTick(){ const el=$('#cosmic'); if(!el)return;
+  const t=(Date.now()-COSMIC_BOOT)/1000;
+  if(performance.now()-cosmicSwap>7000){ cosmicMode^=1; cosmicSwap=performance.now(); }
+  if(cosmicMode===0){                                   // Kardashev civilization type — shimmering low digits
+    const K=0.728140 + t*2e-9 + (Math.random()-0.5)*5e-6;
+    el.innerHTML='<span class="cl">CIVILIZATION · KARDASHEV</span><br><span class="cv">TYPE '+K.toFixed(6)+' ▲</span>';
+  } else {                                              // age of the universe, ticking up in seconds.
+    // Fold in the live Unix epoch so the low ~10 digits are populated and change every second
+    // (a round 13.797 Gyr alone trails off in zeros and looks fake).
+    const s=UNIV_AGE_S0+BigInt(Math.floor(Date.now()/1000));   // exact, ticks every second
+    el.innerHTML='<span class="cl">UNIVERSE AGE · SINCE BIG BANG</span><br><span class="cv">'+s.toLocaleString('en-US')+' s ▲</span>';
+  } }
+
+/* ============ HEAVY CRT toggle + keypress phosphor flash ============ */
+let crtOn=localStorage.getItem('nervCrt')!=='0';
+function applyCrt(){ document.body.classList.toggle('crt',crtOn); crtBurn=crtOn;
+  const b=$('#btnCrt'); if(b){ b.classList.toggle('on',crtOn); b.textContent=crtOn?'▦ CRT':'▦ CRT OFF'; }
+  localStorage.setItem('nervCrt',crtOn?'1':'0'); }
+function flashKey(){ if(!crtOn)return; const k=$('#kflash'); if(!k)return; k.classList.remove('on'); void k.offsetWidth; k.classList.add('on'); }
+window.addEventListener('keydown',flashKey);
+
 /* ============ LOOP ============ */
 let lastDraw=0;
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden)lastDraw=0; });   // resync after unhide
@@ -625,9 +684,10 @@ function bootSeq(){
 
 /* ============ BOOT (no init screen) ============ */
 function boot(){
-  applyScale(); place(); setTerm('claude'); sizeGlobe(); buildMon(); buildMonBig(); layoutMon();
+  applyScale(); applyCrt(); place(); setTerm('shell'); sizeGlobe(); buildMon(); buildMonBig(); layoutMon();
   let rsz; window.addEventListener('resize',()=>{ clearTimeout(rsz); rsz=setTimeout(()=>{ sizeGlobe(); layoutMon(); sizeBig(); },120); });   // debounced
   todoLoad(); poll(); setInterval(poll,1500); setInterval(clock,1000); clock(); setInterval(todoLoad,5000);
+  cosmicTick(); setInterval(cosmicTick,160);
   requestAnimationFrame(frame);
   // audio arms on first interaction (browser gesture rule)
   window.addEventListener('click',arm,{once:false}); window.addEventListener('keydown',arm,{once:false});

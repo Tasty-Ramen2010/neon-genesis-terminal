@@ -14,6 +14,8 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("NERV_PORT", "8731"))
+TTYD_PORT = int(os.environ.get("NERV_TTYD_PORT", "7682"))    # injected into the page so multi-instance works
+SHELL_PORT = int(os.environ.get("NERV_SHELL_PORT", "7683"))
 PROJECT = os.environ.get("NERV_PROJECT", os.path.expanduser("~"))
 TODO_FILE = os.path.expanduser("~/.config/nerv-theme/todo.json")
 
@@ -200,7 +202,10 @@ class Sampler(threading.Thread):
         out={}
         kp=get_json("https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json", timeout=6)
         if kp and len(kp)>1:
-            try: out["kp"]=float(kp[-1][1]); out["kp_time"]=kp[-1][0]
+            last=kp[-1]   # NOAA returns list-of-dicts ({"Kp":4.33,...}); tolerate list-of-lists too
+            try:
+                if isinstance(last,dict): out["kp"]=float(last.get("Kp")); out["kp_time"]=last.get("time_tag")
+                else: out["kp"]=float(last[1]); out["kp_time"]=last[0]
             except Exception: pass
         wind=get_json("https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json", timeout=6)
         if wind and len(wind)>1:
@@ -341,7 +346,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200,"ok","text/plain")
         elif self.path=="/" or self.path.startswith("/index"):
             try:
-                with open(os.path.join(HERE,"nerv-dashboard.html"),"rb") as f: self._send(200,f.read(),"text/html; charset=utf-8")
+                with open(os.path.join(HERE,"nerv-dashboard.html"),encoding="utf-8") as f: html=f.read()
+                inject=f'<script>window.NERV_TTYD_PORT={TTYD_PORT};window.NERV_SHELL_PORT={SHELL_PORT};window.NERV_STATS_PORT={PORT};</script>'
+                html=html.replace("</head>",inject+"</head>",1)
+                self._send(200,html.encode("utf-8"),"text/html; charset=utf-8")
             except Exception as e: self._send(500,f"missing html: {e}","text/plain")
         else: self._send(404,"not found","text/plain")
     def do_POST(self):
