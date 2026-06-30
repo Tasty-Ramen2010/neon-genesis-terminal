@@ -27,23 +27,30 @@ cat <<'BANNER'
 BANNER
 printf "${RST}\n"
 
-# ---- 1. platform check --------------------------------------------------
-[ "$(uname)" = "Darwin" ] || die "This app is macOS-only (it builds a native WKWebView app)."
-ok "macOS detected"
+# ---- 1. platform ---------------------------------------------------------
+OS="$(uname 2>/dev/null || echo unknown)"
+case "$OS" in
+  Darwin) ok "macOS detected — native NERV.app + browser console";;
+  Linux)  ok "Linux detected — browser console (no native app)";;
+  *)      warn "Unrecognized platform '$OS' — installing the browser console; native app is macOS-only";;
+esac
+IS_MAC=0; [ "$OS" = "Darwin" ] && IS_MAC=1
 
 # ---- 2. dependency check ------------------------------------------------
 say "${CYAN}▸ Checking dependencies…${RST}"
 MISSING=()
 command -v python3 >/dev/null 2>&1 && ok "python3" || MISSING+=("python3")
-command -v swiftc  >/dev/null 2>&1 && ok "swiftc (Xcode CLT)" || MISSING+=("xcode-select")
-# The terminal is now built in (xterm.js + a stdlib PTY bridge) — no ttyd needed.
+if [ "$IS_MAC" = "1" ]; then
+  command -v swiftc >/dev/null 2>&1 && ok "swiftc (Xcode CLT)" || MISSING+=("xcode-select")
+fi
+# The terminal is built in (xterm.js + a stdlib PTY bridge) — no ttyd needed.
 
 if [ ${#MISSING[@]} -gt 0 ]; then
   warn "Missing: ${MISSING[*]}"
   for m in "${MISSING[@]}"; do
     case "$m" in
       xcode-select) say "    install with: ${DIM}xcode-select --install${RST}";;
-      python3)      say "    install with: ${DIM}brew install python3${RST}";;
+      python3)      say "    install with: ${DIM}your package manager, e.g. apt install python3 / brew install python3${RST}";;
     esac
   done
   die "Install the missing dependencies above, then re-run ./install.sh"
@@ -57,8 +64,9 @@ cp "$HERE/dashboard/nerv-server.py"      "$DASH/"
 cp "$HERE/dashboard/nerv-dash"           "$DASH/"
 cp "$HERE/dashboard/term-launch"         "$DASH/"
 cp "$HERE/dashboard/shell-launch"        "$DASH/"
+cp "$HERE/dashboard/nerv-launch.py"      "$DASH/"   # portable launcher (any OS)
 mkdir -p "$DASH/vendor"; cp "$HERE"/dashboard/vendor/* "$DASH/vendor/"   # xterm.js terminal
-chmod +x "$DASH/nerv-dash" "$DASH/term-launch" "$DASH/shell-launch" "$DASH/nerv-server.py"
+chmod +x "$DASH/nerv-dash" "$DASH/term-launch" "$DASH/shell-launch" "$DASH/nerv-server.py" "$DASH/nerv-launch.py"
 ok "dashboard files copied"
 
 mkdir -p "$BIN"
@@ -66,7 +74,15 @@ ln -sf "$DASH/nerv-dash" "$BIN/nerv-dash"
 ok "launcher linked → $BIN/nerv-dash"
 case ":$PATH:" in *":$BIN:"*) :;; *) warn "$BIN is not on your PATH — add it to use 'nerv-dash' directly";; esac
 
-# ---- 4. build NERV.app --------------------------------------------------
+# ---- 4. build NERV.app (macOS only) -------------------------------------
+if [ "$IS_MAC" != "1" ]; then
+  say "${CYAN}▸ Skipping native app (macOS only).${RST}"
+  say "  On this platform, launch the console with:"
+  say "    ${CYAN}python3 $DASH/nerv-launch.py${RST}        ${DIM}(portable, any OS)${RST}"
+  [ "$OS" = "Linux" ] && say "    ${CYAN}nerv-dash${RST}                              ${DIM}(bash launcher)${RST}"
+  printf "\n${GRN}✓ Console installed.${RST} Run one of the commands above, then your browser opens the deck.\n"
+  exit 0
+fi
 say "${CYAN}▸ Building NERV.app…${RST}"
 APP="/Applications/NERV.app"
 TMP="$(mktemp -d)"

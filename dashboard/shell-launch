@@ -1,6 +1,8 @@
-#!/bin/zsh
-# Plain interactive shell for the SHELL terminal toggle (no Claude).
+#!/bin/sh
+# Plain interactive login shell for the SHELL terminal. POSIX-sh compatible so it
+# runs the same on macOS and Linux; the embedded server execs it via /bin/sh.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.bun/bin:$PATH"
 cd "${NERV_PROJECT:-$HOME}" 2>/dev/null
-clear
-exec /bin/zsh -il
+clear 2>/dev/null
+SH="${SHELL:-/bin/bash}"
+exec "$SH" -il

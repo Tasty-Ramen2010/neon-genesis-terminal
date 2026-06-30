@@ -11,7 +11,24 @@ spawn per-request work). Endpoints:
 """
 import http.server, socketserver, json, subprocess, threading, time, os, sys, re, math
 import urllib.request
-import pty, select, struct, base64, hashlib, fcntl, termios, signal
+import select, struct, base64, hashlib, signal, shutil
+
+# ---- platform detection ----
+MAC   = sys.platform == "darwin"
+LINUX = sys.platform.startswith("linux")
+WIN   = os.name == "nt"
+# POSIX-only modules (pty terminal). Absent on Windows -> the terminal falls back to a pipe bridge.
+try:
+    import pty, fcntl, termios
+    HAS_PTY = True
+except Exception:
+    HAS_PTY = False
+# optional: psutil gives clean cross-platform stats (esp. on Windows). Used only if already installed.
+try:
+    import psutil
+    HAS_PSUTIL = True
+except Exception:
+    HAS_PSUTIL = False
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("NERV_PORT", "8731"))
@@ -81,16 +98,32 @@ def _ws_recv(conn):
         for i in range(len(payload)): payload[i] ^= mask[i & 3]
     return opcode, bytes(payload)
 
+def _launch_argv(mode):
+    """Platform-appropriate command for the embedded terminal."""
+    if WIN:
+        sh = shutil.which("pwsh") or shutil.which("powershell") or os.environ.get("COMSPEC") or "cmd.exe"
+        return [sh]
+    # POSIX: run the portable launch script through /bin/sh (present everywhere),
+    # so the script's own shebang/zsh-isms don't matter.
+    script = "term-launch" if mode == "claude" else "shell-launch"
+    return ["/bin/sh", os.path.join(HERE, script)]
+
 def pty_bridge(conn, mode):
-    """Spawn a login shell (or Claude) on a PTY and bridge it to the websocket.
-    Client protocol: BINARY frames = keystrokes -> PTY; TEXT frames = control JSON
-    ({"resize":[cols,rows]}). Server -> client: BINARY frames of terminal output."""
-    launch = "term-launch" if mode == "claude" else "shell-launch"
+    """Spawn the terminal shell and bridge it to the websocket. BINARY frames =
+    keystrokes -> shell; TEXT frames = control JSON ({"resize":[cols,rows]});
+    server -> client = BINARY frames of terminal output. Uses a real PTY on
+    macOS/Linux; falls back to a pipe bridge on Windows (no full-screen TUIs)."""
+    if HAS_PTY:
+        _posix_pty_bridge(conn, mode)
+    else:
+        _pipe_bridge(conn, mode)
+
+def _posix_pty_bridge(conn, mode):
     master, slave = pty.openpty()
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"; env["NERV_PROJECT"] = PROJECT; env["COLORTERM"] = "truecolor"
     try:
-        proc = subprocess.Popen(["/bin/zsh", os.path.join(HERE, launch)],
+        proc = subprocess.Popen(_launch_argv(mode),
             stdin=slave, stdout=slave, stderr=slave, cwd=PROJECT, env=env,
             preexec_fn=os.setsid, close_fds=True)
     except Exception:
@@ -126,11 +159,47 @@ def pty_bridge(conn, mode):
         try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except Exception: pass
 
+def _pipe_bridge(conn, mode):
+    """Windows fallback: drive a shell over stdin/stdout pipes (line-oriented, no
+    PTY). Good enough for running commands; no curses/full-screen apps."""
+    try:
+        proc = subprocess.Popen(_launch_argv(mode), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, cwd=PROJECT, bufsize=0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        return
+    def pump():
+        while True:
+            try: b = proc.stdout.read(1)
+            except Exception: break
+            if not b: break
+            _ws_send(conn, b, opcode=2)
+    t = threading.Thread(target=pump, daemon=True); t.start()
+    _ws_send(conn, b"NERV terminal (Windows pipe mode) \xe2\x80\x94 basic shell, no full-screen apps.\r\n", opcode=2)
+    try:
+        while True:
+            frame = _ws_recv(conn)
+            if frame is None: break
+            opcode, payload = frame
+            if opcode == 0x8: break
+            elif opcode == 0x2:
+                try: proc.stdin.write(payload); proc.stdin.flush()
+                except Exception: break
+    finally:
+        try: proc.kill()
+        except Exception: pass
+
 def default_iface():
-    for line in sh(["route", "-n", "get", "default"]).splitlines():
-        if "interface:" in line:
-            return line.split()[-1]
-    return "en0"
+    if MAC:
+        for line in sh(["route", "-n", "get", "default"]).splitlines():
+            if "interface:" in line: return line.split()[-1]
+        return "en0"
+    if LINUX:
+        for line in sh(["ip", "route", "show", "default"]).splitlines():
+            f=line.split()
+            if "dev" in f: return f[f.index("dev")+1]
+        return "eth0"
+    return "net0"
 
 # ---------------- to-do storage ----------------
 _todo_lock = threading.Lock()
@@ -165,10 +234,11 @@ class Sampler(threading.Thread):
     def __init__(self):
         super().__init__()
         self.iface = default_iface()
-        self.pagesize = int(sh(["sysctl","-n","hw.pagesize"]).strip() or 16384)
-        self.memtotal = int(sh(["sysctl","-n","hw.memsize"]).strip() or 1)
-        self.ncpu = int(sh(["sysctl","-n","hw.ncpu"]).strip() or 1)
+        self.pagesize = int(sh(["sysctl","-n","hw.pagesize"]).strip() or 16384) if MAC else 4096
+        self.memtotal = self._memtotal()
+        self.ncpu = os.cpu_count() or 1
         self._prev_net = None
+        self._prev_cpu = None   # Linux /proc/stat delta
         self._prev_np = {}   # per-process cumulative bytes (for rates)
         self.iss = None
         self.neo = []
@@ -179,51 +249,126 @@ class Sampler(threading.Thread):
         self.quakes = []     # live USGS earthquakes
         self.launch = None   # next upcoming orbital launch (Launch Library 2)
 
+    def _memtotal(self):
+        if MAC: return int(sh(["sysctl","-n","hw.memsize"]).strip() or 1)
+        if LINUX:
+            try:
+                for l in open("/proc/meminfo"):
+                    if l.startswith("MemTotal:"): return int(l.split()[1])*1024
+            except Exception: pass
+        if HAS_PSUTIL:
+            try: return psutil.virtual_memory().total
+            except Exception: pass
+        return 1
     def cpu(self):
-        for line in sh(["top","-l","1","-n","0"]).splitlines():
-            if "CPU usage" in line:
-                try: return max(0.0, min(100.0, 100.0 - float(line.split(",")[-1].strip().split("%")[0])))
-                except Exception: return 0.0
+        if MAC:
+            for line in sh(["top","-l","1","-n","0"]).splitlines():
+                if "CPU usage" in line:
+                    try: return max(0.0, min(100.0, 100.0 - float(line.split(",")[-1].strip().split("%")[0])))
+                    except Exception: return 0.0
+            return 0.0
+        if LINUX:
+            try:
+                f=open("/proc/stat").readline().split()[1:]; vals=[int(x) for x in f]
+                idle=vals[3]+(vals[4] if len(vals)>4 else 0); total=sum(vals)
+                if self._prev_cpu:
+                    pt,pi=self._prev_cpu; dt=total-pt; di=idle-pi
+                    self._prev_cpu=(total,idle)
+                    return round(max(0.0,min(100.0,100.0*(dt-di)/dt)),1) if dt>0 else 0.0
+                self._prev_cpu=(total,idle); return 0.0
+            except Exception: return 0.0
+        if HAS_PSUTIL:
+            try: return float(psutil.cpu_percent())
+            except Exception: pass
         return 0.0
     def mem(self):
-        out = sh(["vm_stat"])
-        def g(k,i):
-            for l in out.splitlines():
-                if k in l: return int(l.split()[i].rstrip("."))
-            return 0
-        used = (g("Pages active:",2)+g("Pages wired down:",3)+g("occupied by compressor:",4))*self.pagesize
-        return round(used*100.0/self.memtotal,1), round(used/1073741824,1), round(self.memtotal/1073741824,1)
+        if MAC:
+            out = sh(["vm_stat"])
+            def g(k,i):
+                for l in out.splitlines():
+                    if k in l: return int(l.split()[i].rstrip("."))
+                return 0
+            used = (g("Pages active:",2)+g("Pages wired down:",3)+g("occupied by compressor:",4))*self.pagesize
+            return round(used*100.0/self.memtotal,1), round(used/1073741824,1), round(self.memtotal/1073741824,1)
+        if LINUX:
+            try:
+                mi={}
+                for l in open("/proc/meminfo"):
+                    p=l.split(":"); mi[p[0]]=int(p[1].split()[0])*1024
+                used=mi.get("MemTotal",0)-mi.get("MemAvailable",mi.get("MemFree",0))
+                return round(used*100.0/max(1,self.memtotal),1), round(used/1073741824,1), round(self.memtotal/1073741824,1)
+            except Exception: pass
+        if HAS_PSUTIL:
+            try: v=psutil.virtual_memory(); return round(v.percent,1), round(v.used/1073741824,1), round(v.total/1073741824,1)
+            except Exception: pass
+        return 0.0,0.0,round(self.memtotal/1073741824,1)
     def net(self):
-        out = sh(["netstat","-ib"]); ib=ob=0
-        for l in out.splitlines():
-            f=l.split()
-            if f and f[0]==self.iface and len(f)>=10 and f[6].isdigit(): ib=int(f[6]);ob=int(f[9]);break
+        ib=ob=0
+        if MAC:
+            out = sh(["netstat","-ib"])
+            for l in out.splitlines():
+                f=l.split()
+                if f and f[0]==self.iface and len(f)>=10 and f[6].isdigit(): ib=int(f[6]);ob=int(f[9]);break
+        elif LINUX:
+            try:
+                for l in open("/proc/net/dev"):
+                    if ":" not in l: continue
+                    name,rest=l.split(":",1); name=name.strip()
+                    if name=="lo": continue
+                    f=rest.split(); ib+=int(f[0]); ob+=int(f[8])
+            except Exception: pass
+        elif HAS_PSUTIL:
+            try: c=psutil.net_io_counters(); ib=c.bytes_recv; ob=c.bytes_sent
+            except Exception: pass
         now=time.time(); down=up=0.0
         if self._prev_net:
             pt,pi,po=self._prev_net; dt=max(0.5,now-pt)
             down=max(0,(ib-pi))/dt; up=max(0,(ob-po))/dt
         self._prev_net=(now,ib,ob); return down,up
     def disk(self):
-        for l in sh(["df","-k","/"]).splitlines()[1:]:
-            f=l.split()
-            if len(f)>=5: return float(f[4].rstrip("%"))
-        return 0.0
+        try:
+            u=shutil.disk_usage("C:\\" if WIN else "/")   # cross-platform stdlib
+            return round(u.used*100.0/max(1,u.total),1)
+        except Exception: return 0.0
     def procs(self):
-        out=sh(["ps","-Aro","pid,%cpu,%mem,comm"]); res=[]
-        for l in out.splitlines()[1:16]:
-            p=l.strip().split(None,3)
-            if len(p)==4:
-                res.append({"pid":p[0],"cpu":float(p[1]),"mem":float(p[2]),"name":os.path.basename(p[3])[:20]})
+        res=[]
+        if MAC or LINUX:
+            out=sh(["ps","-Aro" if MAC else "axo","pid,%cpu,%mem,comm"])
+            for l in out.splitlines()[1:16]:
+                p=l.strip().split(None,3)
+                if len(p)==4:
+                    try: res.append({"pid":p[0],"cpu":float(p[1]),"mem":float(p[2]),"name":os.path.basename(p[3])[:20]})
+                    except Exception: pass
+        elif HAS_PSUTIL:
+            try:
+                procs=sorted(psutil.process_iter(["pid","name","cpu_percent","memory_percent"]),
+                             key=lambda p:p.info.get("cpu_percent") or 0, reverse=True)[:15]
+                for p in procs: res.append({"pid":str(p.info["pid"]),"cpu":round(p.info.get("cpu_percent") or 0,1),
+                    "mem":round(p.info.get("memory_percent") or 0,1),"name":(p.info.get("name") or "")[:20]})
+            except Exception: pass
         return res
     def mem_detail(self):
-        out=sh(["vm_stat"]); ps=self.pagesize
-        def g(k,i):
-            for l in out.splitlines():
-                if k in l: return int(l.split()[i].rstrip("."))
-            return 0
-        gb=lambda pages: round(pages*ps/1073741824,2)
-        return {"active":gb(g("Pages active:",2)),"wired":gb(g("Pages wired down:",3)),
-                "compressed":gb(g("occupied by compressor:",4)),"free":gb(g("Pages free:",2)+g("Pages inactive:",2))}
+        if MAC:
+            out=sh(["vm_stat"]); ps=self.pagesize
+            def g(k,i):
+                for l in out.splitlines():
+                    if k in l: return int(l.split()[i].rstrip("."))
+                return 0
+            gb=lambda pages: round(pages*ps/1073741824,2)
+            return {"active":gb(g("Pages active:",2)),"wired":gb(g("Pages wired down:",3)),
+                    "compressed":gb(g("occupied by compressor:",4)),"free":gb(g("Pages free:",2)+g("Pages inactive:",2))}
+        if LINUX:
+            try:
+                mi={}
+                for l in open("/proc/meminfo"):
+                    p=l.split(":"); mi[p[0]]=int(p[1].split()[0])*1024
+                gb=lambda b: round(b/1073741824,2)
+                free=mi.get("MemAvailable",mi.get("MemFree",0)); total=mi.get("MemTotal",0)
+                cached=mi.get("Cached",0)+mi.get("Buffers",0); active=max(0,total-free-cached)
+                return {"active":gb(active),"wired":gb(mi.get("Shmem",0)),"compressed":gb(cached),"free":gb(free)}
+            except Exception: pass
+        pct,used,tot=self.mem(); ug=used*1073741824; tg=tot*1073741824
+        return {"active":round(used,2),"wired":0.0,"compressed":0.0,"free":round(max(0,tot-used),2)}
     def net_procs(self):
         # per-process bandwidth (iftop/nethogs-style) via nettop cumulative byte diff
         out=sh(["nettop","-P","-x","-n","-L","1"], timeout=3)
@@ -244,11 +389,27 @@ class Sampler(threading.Thread):
         res.sort(key=lambda x:x["down"]+x["up"], reverse=True)
         return res[:12]
     def battery(self):
-        out=sh(["pmset","-g","batt"]); pct=100
-        m=re.search(r"(\d+)%",out)
-        if m: pct=int(m.group(1))
-        ch = "AC Power" in out or "charging" in out.lower() or "charged" in out.lower()
-        return pct, ch
+        if MAC:
+            out=sh(["pmset","-g","batt"]); pct=100
+            m=re.search(r"(\d+)%",out)
+            if m: pct=int(m.group(1))
+            ch = "AC Power" in out or "charging" in out.lower() or "charged" in out.lower()
+            return pct, ch
+        if LINUX:
+            try:
+                base="/sys/class/power_supply"
+                for d in sorted(os.listdir(base)):
+                    if d.startswith("BAT"):
+                        pct=int(open(os.path.join(base,d,"capacity")).read().strip())
+                        st=open(os.path.join(base,d,"status")).read().strip().lower()
+                        return pct, ("charging" in st or "full" in st)
+            except Exception: pass
+        if HAS_PSUTIL:
+            try:
+                b=psutil.sensors_battery()
+                if b: return int(b.percent), bool(b.power_plugged)
+            except Exception: pass
+        return 100, True   # desktop / unknown -> assume on AC
     def connections(self):
         # real active TCP connections: which app -> which remote host:port
         out=sh(["lsof","-nP","-iTCP","-sTCP:ESTABLISHED"], timeout=3)
@@ -414,8 +575,8 @@ class Sampler(threading.Thread):
         while True:
             try:
                 cpu=self.cpu(); mempct,memu,memt=self.mem(); down,up=self.net()
-                load=sh(["sysctl","-n","vm.loadavg"]).split()
-                load=float(load[1]) if len(load)>1 else 0.0
+                try: load=round(os.getloadavg()[0],2)        # mac+Linux; Windows has no getloadavg
+                except Exception: load=round(cpu/100.0*self.ncpu,2)
                 u=sh(["uptime"]); upt=u.split("up",1)[1].split(",")[0].strip()[:14] if "up" in u else ""
                 bpct,ch=self.battery()
                 self.conns=self.connections()
@@ -447,8 +608,8 @@ class Sampler(threading.Thread):
                     "net_down":round(down),"net_up":round(up),"iface":self.iface,
                     "disk":self.disk(),"load":load,"uptime":upt,"procs":self.procs(),
                     "battery":bpct,"charging":ch,"git":self.git(),
-                    "project":os.path.basename(PROJECT),"host":sh(["hostname","-s"]).strip(),
-                    "user":os.environ.get("USER","operator"),
+                    "project":os.path.basename(PROJECT),"host":__import__("socket").gethostname().split(".")[0],
+                    "user":os.environ.get("USER") or os.environ.get("USERNAME") or "operator",
                     "conns":self.conns,"conn_count":len(self.conns),
                     "net_procs":netprocs,"mem_detail":memd,
                     "iss":self.iss,"neo":self.neo,

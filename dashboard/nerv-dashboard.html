@@ -433,8 +433,53 @@ function dot3(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
 // ground-link data arcs (internet flow) between surface points
 function randPt(){ return [Math.random()*360-180, Math.random()*150-75]; }
 const ARCS=[]; for(let i=0;i<7;i++)ARCS.push({a:randPt(),b:randPt(),t:Math.random(),sp:0.004+Math.random()*0.006,col:i%2?'#46e88a':'#3fe0e0'});
-// Moon (compressed orbit)
-const MOON={a:3.25, inc:0.12, node:0.5, sp:0.13};
+// ---- REAL Moon: geocentric ecliptic position (Schlyter low-precision + main perturbations) ----
+// Returns scene-space position (Earth radii compressed to fit), the real distance (km),
+// illuminated fraction (phase), and ecliptic lon/lat — synced to the actual date/time.
+const MOON_SCENE=3.25/60.27;     // map mean lunar distance (60.27 Re) to the scene's compressed radius
+function _dayno(date){ return (date.getTime()/86400000) - 10957.5; }   // days since 2000-01-01 00:00 UT
+function _norm360(x){ x%=360; return x<0?x+360:x; }
+function sunEclLon(date){            // Sun geocentric ecliptic longitude (deg) — for the Moon's phase
+  const d=_dayno(date), ws=282.9404+4.70935e-5*d, Ms=_norm360(356.0470+0.9856002585*d);
+  const E=Ms+(180/Math.PI)*0.016709*Math.sin(Ms*D2R)*(1+0.016709*Math.cos(Ms*D2R));
+  const xv=Math.cos(E*D2R)-0.016709, yv=Math.sqrt(1-0.016709*0.016709)*Math.sin(E*D2R);
+  return {lon:_norm360(Math.atan2(yv,xv)/D2R+ws), Ms:Ms}; }
+function lunar(date){
+  const d=_dayno(date);
+  const N=125.1228-0.0529538083*d, i=5.1454, w=318.0634+0.1643573223*d;
+  const a=60.2666, e=0.054900, M=_norm360(115.3654+13.0649929509*d);
+  let E=M+(180/Math.PI)*e*Math.sin(M*D2R)*(1+e*Math.cos(M*D2R));   // eccentric anomaly (deg)
+  for(let k=0;k<2;k++){ E=E-(E-(180/Math.PI)*e*Math.sin(E*D2R)-M)/(1-e*Math.cos(E*D2R)); }
+  const xv=a*(Math.cos(E*D2R)-e), yv=a*Math.sqrt(1-e*e)*Math.sin(E*D2R);
+  const v=Math.atan2(yv,xv)/D2R; let r=Math.sqrt(xv*xv+yv*yv);
+  const Nr=N*D2R, vr=(v+w)*D2R, ir=i*D2R;
+  let xh=r*(Math.cos(Nr)*Math.cos(vr)-Math.sin(Nr)*Math.sin(vr)*Math.cos(ir));
+  let yh=r*(Math.sin(Nr)*Math.cos(vr)+Math.cos(Nr)*Math.sin(vr)*Math.cos(ir));
+  let zh=r*(Math.sin(vr)*Math.sin(ir));
+  let lon=Math.atan2(yh,xh)/D2R, lat=Math.atan2(zh,Math.sqrt(xh*xh+yh*yh))/D2R;
+  // main perturbations (Schlyter) — bring it within a couple arcmin of the real Moon
+  const sun=sunEclLon(date), Ls=_norm360(sun.lon), Lm=_norm360(N+w+M), Ms=sun.Ms;
+  const Dm=Lm-Ls, F=Lm-N;
+  lon+= -1.274*Math.sin((M-2*Dm)*D2R) +0.658*Math.sin(2*Dm*D2R) -0.186*Math.sin(Ms*D2R)
+        -0.059*Math.sin((2*M-2*Dm)*D2R) -0.057*Math.sin((M-2*Dm+Ms)*D2R) +0.053*Math.sin((M+2*Dm)*D2R)
+        +0.046*Math.sin((2*Dm-Ms)*D2R) +0.041*Math.sin((M-Ms)*D2R) -0.035*Math.sin(Dm*D2R)
+        -0.031*Math.sin((M+Ms)*D2R) -0.015*Math.sin((2*F-2*Dm)*D2R) +0.011*Math.sin((M-4*Dm)*D2R);
+  lat+= -0.173*Math.sin((F-2*Dm)*D2R) -0.055*Math.sin((M-F-2*Dm)*D2R) -0.046*Math.sin((M+F-2*Dm)*D2R)
+        +0.033*Math.sin((F+2*Dm)*D2R) +0.017*Math.sin((2*M+F)*D2R);
+  r+= -0.58*Math.cos((M-2*Dm)*D2R) -0.46*Math.cos(2*Dm*D2R);
+  const lor=lon*D2R, lar=lat*D2R;
+  // scene world: ecliptic plane -> x/z, ecliptic latitude -> y (up). distance compressed.
+  const sd=r*MOON_SCENE;
+  const pos=[Math.cos(lar)*Math.cos(lor)*sd, Math.sin(lar)*sd, Math.cos(lar)*Math.sin(lor)*sd];
+  const elong=_norm360(lon-Ls);                 // geocentric elongation from Sun
+  const illum=(1-Math.cos(elong*D2R))/2;        // illuminated fraction
+  return {pos, r, km:Math.round(r*6371), lon, lat, illum, waxing:elong<180, elong}; }
+// Moon orbit-ring cache (real orbit sampled over a month, refreshed occasionally)
+let _moonOrbit=null, _moonOrbitT=0;
+function moonOrbit(){ const now=Date.now();
+  if(_moonOrbit && now-_moonOrbitT<3.6e6) return _moonOrbit;   // refresh hourly
+  _moonOrbit=[]; for(let k=0;k<=48;k++){ const dt=new Date(now+ k/48*27.321661*86400000); _moonOrbit.push(lunar(dt).pos); }
+  _moonOrbitT=now; return _moonOrbit; }
 // per-asteroid orbital elements (deterministic from name) — varied directions + real orbits
 const astOrbits=new Map();
 function astParam(n,i){ if(astOrbits.has(n.name))return astOrbits.get(n.name);
@@ -471,15 +516,28 @@ function drawGlobe(dt){
     gx.fillStyle='rgba(255,220,150,0.9)';gx.font='10px monospace';gx.textAlign='left';gx.fillText('SOL',sx+sr+4,sy+3);
     if(big) hitTargets.push({x:sx,y:sy,r:sr+8,html:'<div class="nm">SOL</div><div class="ty">G2V main-sequence star</div><div class="rw">distance <b>1 AU · 149.6M km</b></div><div class="rw">declination <b>'+(solarDecl()/D2R).toFixed(1)+'°</b></div><div class="rw">surface <b>5,778 K</b></div>'}); }
 
-  // ---- Moon orbit + Moon ----
-  if(big){ gx.strokeStyle='rgba(150,160,180,0.16)';gx.lineWidth=1;gx.beginPath();let st=false;
-    for(let th=0;th<=TAU+0.01;th+=0.12){let p=[MOON.a*Math.cos(th),0,MOON.a*Math.sin(th)];p=rotX(p,MOON.inc);p=rotY(p,MOON.node);const q=projW(p);st?gx.lineTo(q[0],q[1]):gx.moveTo(q[0],q[1]);st=true;}gx.stroke(); }
-  let moonP=[MOON.a*Math.cos(T*MOON.sp),0,MOON.a*Math.sin(T*MOON.sp)]; moonP=rotX(moonP,MOON.inc); moonP=rotY(moonP,MOON.node);
-  const mq=projW(moonP); const mr=Math.max(3,R*zoom*0.10);
-  gx.fillStyle='#c9d2da'; gx.beginPath(); gx.arc(mq[0],mq[1],mr,0,TAU); gx.fill();
-  gx.fillStyle='rgba(120,130,140,0.7)'; gx.beginPath(); gx.arc(mq[0]-mr*0.3,mq[1]-mr*0.2,mr*0.28,0,TAU); gx.fill();
+  // ---- Moon (real geocentric position, real orbit, real phase) ----
+  const moon=lunar(new Date());
+  if(big){ const orb=moonOrbit(); gx.strokeStyle='rgba(150,160,180,0.16)';gx.lineWidth=1;gx.beginPath();let st=false;
+    for(const p of orb){ const q=projW(p); st?gx.lineTo(q[0],q[1]):gx.moveTo(q[0],q[1]); st=true; } gx.stroke(); }
+  const moonP=moon.pos; const mq=projW(moonP); const mr=Math.max(3,R*zoom*0.10);
+  // dark disc, then the lit fraction toward the Sun (real phase)
+  gx.fillStyle='#2a3038'; gx.beginPath(); gx.arc(mq[0],mq[1],mr,0,TAU); gx.fill();
+  { const lit=moon.illum;                                  // 0=new .. 1=full
+    const sunp=projW(sunDir()); let ang=Math.atan2(sunp[1]-mq[1],sunp[0]-mq[0]);   // sunlit side faces the Sun
+    gx.save(); gx.beginPath(); gx.arc(mq[0],mq[1],mr,0,TAU); gx.clip();
+    gx.fillStyle='#d2dae2';
+    if(lit>=0.985){ gx.beginPath(); gx.arc(mq[0],mq[1],mr,0,TAU); gx.fill(); }
+    else if(lit>0.015){ // lit region = half-disc (toward sun) minus/plus an ellipse for the terminator
+      gx.translate(mq[0],mq[1]); gx.rotate(ang);
+      gx.beginPath(); gx.arc(0,0,mr,-Math.PI/2,Math.PI/2); // sun-facing half
+      const k=(lit-0.5)/0.5;                               // -1 (new-ish) .. +1 (full-ish)
+      gx.ellipse(0,0,mr*Math.abs(k),mr,0,Math.PI/2,-Math.PI/2,k>0); gx.fill(); }
+    gx.restore(); }
+  gx.strokeStyle='rgba(150,160,175,0.5)';gx.lineWidth=1;gx.beginPath();gx.arc(mq[0],mq[1],mr,0,TAU);gx.stroke();
   gx.fillStyle='rgba(180,190,200,0.85)'; gx.font='10px monospace'; gx.textAlign='left'; gx.fillText('MOON',mq[0]+mr+3,mq[1]+3);
-  if(big) hitTargets.push({x:mq[0],y:mq[1],r:mr+6,html:'<div class="nm">LUNA</div><div class="ty">natural satellite</div><div class="rw">distance <b>384,400 km</b></div><div class="rw">diameter <b>3,474 km</b></div><div class="rw">orbital period <b>27.3 d</b></div>'});
+  if(big){ const phName=moon.illum<0.04?'new':moon.illum>0.96?'full':(moon.waxing?'waxing ':'waning ')+(moon.illum<0.5?'crescent':'gibbous');
+    hitTargets.push({x:mq[0],y:mq[1],r:mr+6,html:'<div class="nm">LUNA</div><div class="ty">natural satellite</div><div class="rw">distance <b>'+moon.km.toLocaleString()+' km</b></div><div class="rw">phase <b>'+phName+'</b> ('+Math.round(moon.illum*100)+'% lit)</div><div class="rw">ecliptic lon <b>'+moon.lon.toFixed(1)+'°</b></div><div class="rw">diameter <b>3,474 km</b></div>'}); }
 
   // ---- Earth wireframe + continents ----
   gx.save(); gx.beginPath(); gx.arc(CX,CY,R*zoom*1.16,0,TAU); gx.clip();

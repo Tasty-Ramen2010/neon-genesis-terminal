@@ -31,7 +31,8 @@ It's inspired by the "SENTRY: Near Earth Object Encounters" geocentric displays 
 - **1,300+ real satellites** — Starlink, GPS, OneWeb, Galileo, GLONASS, weather & GEO birds, fetched as TLEs from Celestrak and propagated client-side (Kepler solve per frame). Colored by constellation, hover to identify.
 - **Live ISS** — true position from the open-notify feed, on its real ground track.
 - **Day / night Earth** — a real solar-declination terminator sweeps the globe; the lit hemisphere glows amber, the night side dims to blue with city lights.
-- **The Sun & Moon** — `SOL` rendered at its true declination with corona + rays; the Moon on a compressed orbit.
+- **The real Moon** — `LUNA` is placed at its **actual geocentric position right now** (a lunar-ephemeris computation with the main perturbations), so it sits where the Moon really is relative to Earth, shows the **correct phase** (lit fraction toward the Sun), and rides its real, slowly-shifting orbit. Hover it for live distance + phase.
+- **The Sun** — `SOL` rendered at its true declination with corona + rays.
 - Drag to orbit, scroll to zoom, hover anything for a NERV-style readout.
 
 ![Geocentric map — fullscreen](screenshots/geocentric.png)
@@ -71,28 +72,40 @@ Phosphor bloom, a rolling refresh-sweep, gentle flicker, chromatic fringing on l
 ## Quick start
 
 ```bash
-# 1. clone
 git clone https://github.com/Tasty-Ramen2010/neon-genesis-terminal.git
 cd neon-genesis-terminal
-
-# 2. install (builds NERV.app, installs the dashboard, prompts for a NASA key)
-./install.sh
-
-# 3. launch
-open /Applications/NERV.app
+./install.sh            # checks deps; builds NERV.app on macOS; prompts for a NASA key
 ```
 
-That's it. Double-click any panel to make it the main view; click `⤢` for fullscreen.
+Then launch:
+
+| Platform | Launch |
+|----------|--------|
+| **macOS** | `open /Applications/NERV.app` (native window) — or `nerv-dash` for the browser console |
+| **Linux** | `nerv-dash` — or `python3 ~/.config/nerv-theme/dashboard/nerv-launch.py` |
+| **Windows** | `python dashboard\nerv-launch.py` (from the repo; or use WSL for the full experience) |
+
+Double-click any panel to make it the main view; click `⤢` for fullscreen.
+
+### Platform support
+
+| | Geocentric map · data · terminal | Native maximized app |
+|---|:---:|:---:|
+| **macOS** | ✅ full | ✅ NERV.app (WKWebView) |
+| **Linux** | ✅ full (system stats via `/proc`, real PTY terminal) | — (runs in your browser) |
+| **Windows** | ✅ visuals + data; terminal in basic pipe mode¹ | — (runs in your browser) |
+
+¹ The terminal uses a real PTY on macOS/Linux (full Tab-completion, TUIs, burn-in). On native Windows it falls back to a line-oriented pipe shell — fine for commands, no full-screen apps. For the full terminal on Windows, run it under **WSL**. System-stats panels on Windows use [`psutil`](https://pypi.org/project/psutil/) if it's installed, otherwise they show limited values; the geocentric map, space weather, deep-space telemetry, and all the live feeds are 100% browser-side and identical everywhere.
 
 ### Dependencies
 The installer checks for these and tells you how to get any you're missing:
 
 | Tool | Why | Install |
 |------|-----|---------|
-| `python3` | stdlib-only backend (data sampler + HTTP + PTY terminal) | preinstalled / `brew install python3` |
-| Xcode CLT | `swiftc` to build the native app | `xcode-select --install` |
+| `python3` | stdlib-only backend (data sampler + HTTP + PTY terminal) — **all platforms** | preinstalled / `brew install python3` / `apt install python3` |
+| Xcode CLT | `swiftc` to build the native app — **macOS only** | `xcode-select --install` |
 
-That's it — the terminal (xterm.js) is vendored in the repo and the backend is pure Python stdlib, so there's nothing else to install.
+That's it — the terminal (xterm.js) is vendored in the repo and the backend is pure Python stdlib, so there's nothing else to install. (Optional on Windows: `pip install psutil` for richer system-stats panels.)
 
 Prefer no app? Run **`nerv-dash`** to start the services and open the console in your browser instead.
 
@@ -150,7 +163,8 @@ Everything is driven by **`nerv-dash`** (installed to `~/.local/bin`). The nativ
 | `nerv-dash stop` | Stop this instance (the one on `$NERV_PORT`, default 8731) |
 | `nerv-dash kill` | Panic: hard-stop everything + clear stray audio |
 | `nerv-dash ports` | Print the next free port triplet |
-| `open /Applications/NERV.app` | Launch the native app (open it again for a second window/instance) |
+| `open /Applications/NERV.app` | Launch the native app — macOS (open it again for a second window/instance) |
+| `python3 dashboard/nerv-launch.py [DIR]` | **Portable launcher** (any OS) — finds free ports, starts the server, opens your browser |
 
 **Environment overrides** (for manual control): `NASA_API_KEY`, `NERV_PORT`, `NERV_TTYD_PORT`, `NERV_SHELL_PORT`, `NERV_PROJECT`.
 

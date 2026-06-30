@@ -74,6 +74,11 @@ case "${1:-up}" in
 esac
 
 start_stats; wait_up
-if [ -d "/Applications/Google Chrome.app" ]; then open -na "Google Chrome" --args --app="$URL" --window-size=1700,1050 >/dev/null 2>&1
-else open "$URL"; fi
+# open a browser, cross-platform (macOS chrome-app / open · Linux xdg-open · WSL)
+if [ "$(uname)" = "Darwin" ]; then
+  if [ -d "/Applications/Google Chrome.app" ]; then open -na "Google Chrome" --args --app="$URL" --window-size=1700,1050 >/dev/null 2>&1
+  else open "$URL"; fi
+elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 &
+elif command -v wslview >/dev/null 2>&1; then wslview "$URL" >/dev/null 2>&1 &
+else echo "open this in your browser: $URL"; fi
 echo "NERV console -> $URL   (project: $PROJECT · stop: NERV_PORT=$PORT nerv-dash stop)"
