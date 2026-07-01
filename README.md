@@ -51,7 +51,7 @@ The **Hubble Space Telescope** is tracked on the globe from its real TLE, with a
 
 ### 🌍 The Earth reacts
 - **Live aurora oval** — glowing rings around the poles, scaled by the real Kp index (they brighten and creep equatorward as geomagnetic activity climbs).
-- **Earthquake pulses** — every quake from the live USGS feed sends an expanding, magnitude-colored ripple from its epicenter.
+- **Earthquake shockwaves** — every quake from the live USGS feed sends a **real great-circle wavefront** expanding across the globe's surface at seismic-wave velocity (~3.7 km/s), positioned by the *actual elapsed time* since the quake. Minor quakes are quick dots that fade in minutes; major quakes (M6+) stay active for ~an hour with repeated wavefronts crossing the planet, a pulsing epicenter, and a seismic alert. Hover any M4.5+ for magnitude, location, depth, and how far its shockwave has traveled.
 - **Next launch countdown** — the rotating readout shows the next orbital launch with a live `T-` clock.
 
 ### 📊 System monitor & network feed

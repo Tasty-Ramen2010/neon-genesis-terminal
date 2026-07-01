@@ -430,6 +430,28 @@ function solarDecl(){ const now=new Date(); const start=Date.UTC(now.getUTCFullY
 // Sun held at a fixed inertial longitude; earthSpin sweeps the lit hemisphere -> stylized day/night cycle.
 function sunDir(){ const d=solarDecl(); return [Math.cos(d)*Math.sin(0.6), Math.sin(d), Math.cos(d)*Math.cos(0.6)]; }
 function dot3(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function cross3(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function norm3(a){ const m=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/m,a[1]/m,a[2]/m]; }
+// Draw a shockwave wavefront: the circle of points at angular radius `th` (radians)
+// from epicenter unit-vector `c` on the globe surface. Front-hemisphere clipped.
+function drawWavefront(c, th, rgb, alpha, width, lift, glow){
+  if(th<=0 || th>=Math.PI) return;
+  let u=cross3(c,[0,1,0]); if(Math.hypot(u[0],u[1],u[2])<1e-4) u=cross3(c,[1,0,0]); u=norm3(u);
+  const w=cross3(c,u);   // c,u,w orthonormal
+  const ct=Math.cos(th), st=Math.sin(th), L=lift||1.008;
+  gx.strokeStyle='rgba('+rgb+','+alpha+')'; gx.lineWidth=width;
+  if(glow){ gx.shadowColor='rgba('+rgb+',0.9)'; gx.shadowBlur=glow; }
+  gx.beginPath(); let started=false;
+  for(let a=0;a<=TAU+0.001;a+=0.14){
+    const ca=Math.cos(a), sa=Math.sin(a);
+    const d=[ct*c[0]+st*(ca*u[0]+sa*w[0]), ct*c[1]+st*(ca*u[1]+sa*w[1]), ct*c[2]+st*(ca*u[2]+sa*w[2])];
+    const p=view([d[0]*L,d[1]*L,d[2]*L]);
+    if(p[2]<=0){ started=false; continue; }          // behind the globe -> break the line
+    const q=[CX+p[0]*R*zoom, CY-p[1]*R*zoom];
+    started?gx.lineTo(q[0],q[1]):gx.moveTo(q[0],q[1]); started=true;
+  }
+  gx.stroke(); gx.shadowBlur=0;
+}
 // ground-link data arcs (internet flow) between surface points
 function randPt(){ return [Math.random()*360-180, Math.random()*150-75]; }
 const ARCS=[]; for(let i=0;i<7;i++)ARCS.push({a:randPt(),b:randPt(),t:Math.random(),sp:0.004+Math.random()*0.006,col:i%2?'#46e88a':'#3fe0e0'});
@@ -606,17 +628,50 @@ function drawGlobe(dt){
           if(p[2]<=0){st=false;continue;} const q=[CX+p[0]*R*zoom,CY-p[1]*R*zoom]; st?gx.lineTo(q[0],q[1]):gx.moveTo(q[0],q[1]);st=true; }
         gx.stroke(); } } }
 
-  // ---- live earthquake pulses (USGS) — expanding ripples at epicenters ----
-  if(big){ const qs=S.quakes||[]; const nowS=Date.now()/1000;
-    for(const Q of qs){ const e=earthVec(Q.lat,Q.lon); const p=view([e[0]*1.005,e[1]*1.005,e[2]*1.005]);
-      if(p[2]<=0) continue; const q=[CX+p[0]*R*zoom,CY-p[1]*R*zoom];
-      const age=nowS-Q.t; const phase=(performance.now()/1000+Q.lon)%2.2/2.2;   // staggered ripple
-      const baseR=clamp(Q.mag*2.2,3,18), rr=baseR*(0.4+phase);
-      const fade=clamp(1-age/86400,0.12,1)*(1-phase);
-      const col=Q.mag>=5?'255,59,59':Q.mag>=3?'245,209,40':'70,232,138';
-      gx.strokeStyle='rgba('+col+','+(0.5*fade)+')';gx.lineWidth=1.3;gx.beginPath();gx.arc(q[0],q[1],rr*zoom,0,TAU);gx.stroke();
-      gx.fillStyle='rgba('+col+','+(0.8*fade)+')';gx.beginPath();gx.arc(q[0],q[1],1.7,0,TAU);gx.fill();
-      if(Q.mag>=4.5) hitTargets.push({x:q[0],y:q[1],r:Math.max(7,rr),html:'<div class="nm">M'+Q.mag.toFixed(1)+' EARTHQUAKE</div><div class="ty">USGS · seismic event</div><div class="rw">'+Q.place+'</div><div class="rw">depth <b>'+Q.depth+' km</b></div>'}); } }
+  // ---- live earthquakes (USGS) — real great-circle shockwaves at seismic velocity ----
+  // Surface (Rayleigh) waves travel ~3.7 km/s -> angular speed on a 6371 km Earth.
+  // Wavefronts expand from the real epicenter using the real elapsed time since the
+  // quake, so they're where the energy physically would be. Big quakes stay active
+  // (bright epicenter + repeated wavefronts crossing the planet) for ~an hour; small
+  // ones are quick dots that fade within minutes.
+  if(big){ const qs=S.quakes||[]; const nowS=Date.now()/1000; const OMEGA=3.7/6371;   // rad/s
+    let alertQ=null;
+    for(const Q of qs){ const age=nowS-Q.t; if(age<0) continue; const mag=Q.mag;
+      // visibility window scales with magnitude: minor quakes are quick (~20 min) and
+      // vanish; major quakes stay active with planet-crossing wavefronts for ~an hour.
+      const life = mag>=6?3600 : mag>=4.5?3600 : mag>=3?2400 : 1200;
+      if(age>life) continue;                                          // faded / disappeared
+      const c=earthVec(Q.lat,Q.lon); const pe=view(c);
+      const front = pe[2]>0;
+      const rgb = mag>=6?'255,59,59' : mag>=4.5?'255,140,58' : mag>=3?'245,209,40' : '70,232,138';
+      const lifeFade = 1-age/life;                                    // overall fade over its lifetime
+      // wavefronts: one leading front, plus trailing pulses for stronger quakes (sustained energy)
+      const nFronts = mag>=6?8 : mag>=5?4 : mag>=4?2 : 1;
+      const period  = 240;                                            // s between successive wavefronts
+      const amp = clamp((mag-2)/6, 0.12, 1);
+      for(let k=0;k<nFronts;k++){ const wa=age-k*period; if(wa<=0) continue;
+        const th=OMEGA*wa; if(th>=Math.PI*0.985) continue;
+        const spread=(1-th/Math.PI);                                  // geometric fade as it spreads
+        const a=amp*spread*lifeFade*(k===0?1:0.55);
+        if(a<0.03) continue;
+        // leading edge (k=0) is bright + glowing so shockwaves read distinctly from sats/aurora
+        drawWavefront(c, th, rgb, a, (mag>=6?2.6:1.6)*(k===0?1.15:0.8), 1.012, k===0?(mag>=5?12:7):0);
+      }
+      // pulsing epicenter (fast throb for liveliness) — magnitude-sized
+      if(front){ const q=[CX+pe[0]*R*zoom, CY-pe[1]*R*zoom];
+        const throb=0.6+0.4*Math.sin(T*4+Q.lon);
+        const er=clamp(1.4+mag*0.7,2,7)*(0.7+0.3*throb);
+        gx.fillStyle='rgba('+rgb+','+(0.85*lifeFade)+')'; gx.shadowColor='rgba('+rgb+',1)'; gx.shadowBlur=mag>=5?10:0;
+        gx.beginPath(); gx.arc(q[0],q[1],er,0,TAU); gx.fill(); gx.shadowBlur=0;
+        if(mag>=4.5){ gx.fillStyle='rgba('+rgb+','+(0.95*lifeFade)+')'; gx.font='9px monospace'; gx.textAlign='left';
+          gx.fillText('M'+mag.toFixed(1), q[0]+er+3, q[1]+3);
+          hitTargets.push({x:q[0],y:q[1],r:Math.max(8,er+4),html:'<div class="nm">M'+mag.toFixed(1)+' EARTHQUAKE</div><div class="ty">USGS · '+Math.round(age/60)+' min ago</div><div class="rw">'+Q.place+'</div><div class="rw">depth <b>'+Q.depth+' km</b></div><div class="rw">shockwave <b>'+Math.round(OMEGA*age*6371)+' km out</b></div>'}); }
+        if(mag>=5 && (!alertQ || mag>alertQ.mag)) alertQ={mag:mag,place:Q.place,age:age}; }
+    }
+    // corner alert for a significant active quake
+    if(alertQ){ gx.fillStyle='rgba(255,59,59,'+(0.6+0.4*Math.sin(T*3))+')'; gx.font='11px monospace'; gx.textAlign='left';
+      gx.fillText('⚠ SEISMIC · M'+alertQ.mag.toFixed(1)+' · '+alertQ.place.slice(0,34), 12, GH-12); }
+  }
 
   // ---- NEO asteroids: real NASA data, individual 3D orbits, varied directions ----
   const neo=S.neo||[]; gx.textAlign='left';

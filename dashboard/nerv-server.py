@@ -507,11 +507,12 @@ class Sampler(threading.Thread):
                          "r":round(a/RE,4),"alt":round(a-RE)}
         except Exception: pass
     def fetch_quakes(self):
-        # live earthquakes (past day) from USGS
+        # live earthquakes (past day) from USGS — the frontend animates real
+        # great-circle shockwaves from these, so keep the freshest ones.
         j=get_json("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson", timeout=8)
         if not j or "features" not in j: return
         out=[]
-        for f in j["features"][:80]:
+        for f in j["features"]:
             try:
                 c=f["geometry"]["coordinates"]; p=f["properties"]
                 m=p.get("mag")
@@ -519,8 +520,8 @@ class Sampler(threading.Thread):
                 out.append({"lon":c[0],"lat":c[1],"mag":round(float(m),1),
                             "depth":round(c[2]),"place":(p.get("place") or "")[:40],"t":int(p.get("time",0))//1000})
             except Exception: pass
-        out.sort(key=lambda q:q["t"], reverse=True)
-        self.quakes=out[:60]
+        out.sort(key=lambda q:q["t"], reverse=True)   # newest first (they drive the live shockwaves)
+        self.quakes=out[:90]
     def fetch_launch(self):
         # next upcoming orbital launch (Launch Library 2, keyless)
         j=get_json("https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=1&mode=list", timeout=8)
