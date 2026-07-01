@@ -152,6 +152,9 @@ nerv-dashboard.html  (vanilla JS + Canvas 2D + xterm.js, self-contained)
 
 ## Commands
 
+> **See [GUIDE.md](GUIDE.md) for the full command + controls reference.**
+
+
 Everything is driven by **`nerv-dash`** (installed to `~/.local/bin`). The native app calls it for you, but you can use it directly too:
 
 | Command | What it does |

@@ -530,8 +530,11 @@ function astPos(o,T){ const M=o.M0+o.sp*T, r=o.a*(1-o.e*o.e)/(1+o.e*Math.cos(M))
 
 function drawGlobe(dt){
   const T=performance.now()/1000; const big=isGlobeBig();
-  earthSpin += dt*5;                          // cosmetic fast spin (~72s/rev); does NOT drive day/night
-  if(!big) yaw += dt*0.18;                     // gentle auto-rotate when small; user drives when big
+  // Earth is NOT spun fast: a fast spin would force the Sun to orbit the Earth (the lit
+  // hemisphere must face the Sun). Instead the geography is fixed and the day/night
+  // terminator tracks the real sub-solar point, drifting slowly at the real rate — so the
+  // Sun stays put and the shadow sits at the correct real position (e.g. over your city).
+  if(!big) yaw += dt*0.10;                     // gentle camera drift when small; user drives when big
   // CRT phosphor burn-in: fade the previous frame instead of clearing, so moving
   // satellites/asteroids/the ISS leave glowing trails. Plain clear when CRT is off.
   if(crtBurn){ gx.fillStyle='rgba(2,4,7,0.38)'; gx.fillRect(0,0,GW,GH); } else { gx.clearRect(0,0,GW,GH); }
