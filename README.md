@@ -34,6 +34,7 @@ It's inspired by the "SENTRY: Near Earth Object Encounters" geocentric displays 
 - **Real continents + day/night** — actual coastlines from a Natural Earth land mask render as glowing terrain; a real solar-declination terminator sweeps across, the lit hemisphere in amber, the night side dimming to blue with city lights.
 - **The real Moon** — `LUNA` is placed at its **actual geocentric position right now** (a lunar-ephemeris computation with the main perturbations), so it sits where the Moon really is relative to Earth, shows the **correct phase** (lit fraction toward the Sun), and rides its real, slowly-shifting orbit. Hover it for live distance + phase.
 - **The Sun** — `SOL` rendered at its true declination with corona + rays.
+- **The planets** — Mercury through Neptune shown at their **real geocentric direction** (where they actually are in the sky right now), as glowing colored bodies — Saturn with its ring, Mars red, the ice giants in blue/cyan. Hover for live distance.
 - Drag to orbit, scroll to zoom, hover anything for a NERV-style readout.
 
 ![Geocentric map — fullscreen](screenshots/geocentric.png)

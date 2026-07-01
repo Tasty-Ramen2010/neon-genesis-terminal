@@ -87,7 +87,7 @@ Then drag one window to each monitor. Open as many as you like — ports step by
   point from UTC — the shadow sits at the correct real position and drifts slowly).
 - **Your location** — a green NERV beacon at your approximate city/state (IP-based).
 - **1,300+ satellites** (Celestrak TLEs), **Hubble**, and the **ISS**, all real.
-- **Real asteroids** (NASA NeoWs), the **real Moon** (real position + phase), and the **Sun**.
+- **Real asteroids** (NASA NeoWs), the **real Moon** (real position + phase), the **Sun**, and the **planets** (Mercury–Neptune at their real geocentric sky positions).
 - **Live aurora oval** (scaled by the real Kp index) and **earthquake shockwaves**
   (real USGS quakes; great-circle wavefronts at seismic velocity).
 

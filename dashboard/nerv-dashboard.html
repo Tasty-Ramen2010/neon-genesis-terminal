@@ -418,10 +418,15 @@ const SAT_GROUPS={starlink:{c:'#3fe0e0',l:'STARLINK'},'gps-ops':{c:'#ffe14d',l:'
 const D2R=Math.PI/180;
 let satState=[], satSrc=null;
 function rebuildSats(){ const raw=S.sats||[]; if(raw===satSrc)return; satSrc=raw;
-  // precompute radians + a stable random phase offset so the swarm isn't synchronized
-  satState=raw.map((s,i)=>({ r:s.r, e:s.e||0, inc:s.inc*D2R, raan:s.raan*D2R, argp:s.argp*D2R,
-    M0:(s.ma*D2R)+(i*0.013)%TAU, n:(s.mm*TAU/86400)*120,   // 120x real rate so motion reads on screen
-    col:(SAT_GROUPS[s.g]||{c:'#8a96a0'}).c, g:s.g, n22:s.n })); }
+  // Real TLEs cluster many sats in shared orbital planes -> they render as clean lines/bands.
+  // Scatter each one deterministically (radius, inclination, node, phase) so the swarm looks
+  // like a dispersed cloud rather than straight trains, while keeping realistic altitudes.
+  const rnd=(i,k)=>{ const x=Math.sin((i+1)*k*12.9898)*43758.5453; return x-Math.floor(x); };
+  satState=raw.map((s,i)=>({ r:s.r*(1+(rnd(i,1.7)-0.5)*0.11),          // ±5.5% radial scatter
+    e:s.e||0, inc:(s.inc+(rnd(i,2.3)-0.5)*10)*D2R,                      // ±5° inclination scatter
+    raan:(s.raan+(rnd(i,3.1)-0.5)*14)*D2R,                             // ±7° node scatter
+    argp:s.argp*D2R, M0:rnd(i,4.2)*TAU,                                // fully random phase
+    n:(s.mm*TAU/86400)*120, col:(SAT_GROUPS[s.g]||{c:'#8a96a0'}).c, g:s.g, n22:s.n })); }
 function satPos(s,T){ let M=s.M0+s.n*T; M%=TAU;
   let E=M; for(let k=0;k<3;k++){ E=E-(E-s.e*Math.sin(E)-M)/(1-s.e*Math.cos(E)); }   // Kepler (Newton)
   const a=s.r, xp=a*(Math.cos(E)-s.e), yp=a*Math.sqrt(1-s.e*s.e)*Math.sin(E);
@@ -440,7 +445,10 @@ function solarDecl(){ const now=new Date(); const start=Date.UTC(now.getUTCFullY
 function subSolarLon(){ const n=new Date();
   const s=n.getUTCHours()*3600+n.getUTCMinutes()*60+n.getUTCSeconds();
   return 180-(s/86400)*360; }
-function sunDir(){ return earthVec(solarDecl(), subSolarLon()); }
+// Sun fixed in inertial space (real declination + real sub-solar longitude, NO earthSpin) —
+// so it stays put while the Earth spins fast beneath it and the day/night sweeps across.
+function sunDir(){ const d=solarDecl()*D2R, lo=subSolarLon()*D2R;
+  return [Math.cos(d)*Math.sin(lo), Math.sin(d), Math.cos(d)*Math.cos(lo)]; }
 function dot3(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
 function cross3(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
 function norm3(a){ const m=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/m,a[1]/m,a[2]/m]; }
@@ -514,6 +522,34 @@ function moonOrbit(){ const now=Date.now();
   if(_moonOrbit && now-_moonOrbitT<3.6e6) return _moonOrbit;   // refresh hourly
   _moonOrbit=[]; for(let k=0;k<=48;k++){ const dt=new Date(now+ k/48*27.321661*86400000); _moonOrbit.push(lunar(dt).pos); }
   _moonOrbitT=now; return _moonOrbit; }
+
+// ---- REAL planets: geocentric positions (Schlyter low-precision) at their actual sky ----
+// direction relative to Earth right now, placed at a log-compressed distance so all fit.
+const PLANETS=[
+  {n:'MERCURY',c:'#b0a48f',rp:2.6,el:{N:[48.3313,3.24587e-5],i:[7.0047,5.00e-8],w:[29.1241,1.01444e-5],a:[0.387098,0],e:[0.205635,5.59e-10],M:[168.6562,4.0923344368]}},
+  {n:'VENUS',  c:'#f0e0a8',rp:3.6,el:{N:[76.6799,2.46590e-5],i:[3.3946,2.75e-8],w:[54.8910,1.38374e-5],a:[0.723330,0],e:[0.006773,-1.302e-9],M:[48.0052,1.6021302244]}},
+  {n:'MARS',   c:'#e05a34',rp:3.1,el:{N:[49.5574,2.11081e-5],i:[1.8497,-1.78e-8],w:[286.5016,2.92961e-5],a:[1.523688,0],e:[0.093405,2.516e-9],M:[18.6021,0.5240207766]}},
+  {n:'JUPITER',c:'#e0b070',rp:5.8,el:{N:[100.4542,2.76854e-5],i:[1.3030,-1.557e-7],w:[273.8777,1.64505e-5],a:[5.20256,0],e:[0.048498,4.469e-9],M:[19.8950,0.0830853001]}},
+  {n:'SATURN', c:'#e8cf88',rp:5.0,ring:1,el:{N:[113.6634,2.38980e-5],i:[2.4886,-1.081e-7],w:[339.3939,2.97661e-5],a:[9.55475,0],e:[0.055546,-9.499e-9],M:[316.9670,0.0334442282]}},
+  {n:'URANUS', c:'#8fe0e0',rp:3.7,el:{N:[74.0005,1.3978e-5],i:[0.7733,1.9e-8],w:[96.6612,3.0565e-5],a:[19.18171,-1.55e-8],e:[0.047318,7.45e-9],M:[142.5905,0.011725806]}},
+  {n:'NEPTUNE',c:'#6a86ff',rp:3.7,el:{N:[131.7806,3.0173e-5],i:[1.7700,-2.55e-7],w:[272.8461,-6.027e-6],a:[30.05826,3.313e-8],e:[0.008606,2.15e-9],M:[260.2471,0.005995147]}}];
+function _pnorm(x){ x%=360; return x<0?x+360:x; }
+function _helio(el,d){ const N=(el.N[0]+el.N[1]*d)*D2R, i=(el.i[0]+el.i[1]*d)*D2R, w=(el.w[0]+el.w[1]*d)*D2R,
+  a=el.a[0]+el.a[1]*d, e=el.e[0]+el.e[1]*d, M=_pnorm(el.M[0]+el.M[1]*d)*D2R;
+  let E=M+e*Math.sin(M)*(1+e*Math.cos(M)); for(let k=0;k<4;k++) E=E-(E-e*Math.sin(E)-M)/(1-e*Math.cos(E));
+  const xv=a*(Math.cos(E)-e), yv=a*Math.sqrt(1-e*e)*Math.sin(E), v=Math.atan2(yv,xv), r=Math.hypot(xv,yv);
+  return [r*(Math.cos(N)*Math.cos(v+w)-Math.sin(N)*Math.sin(v+w)*Math.cos(i)),
+          r*(Math.sin(N)*Math.cos(v+w)+Math.cos(N)*Math.sin(v+w)*Math.cos(i)),
+          r*(Math.sin(v+w)*Math.sin(i))]; }
+function _sunGeoR(d){ const w=282.9404+4.70935e-5*d, M=_pnorm(356.0470+0.9856002585*d)*D2R, e=0.016709;
+  let E=M+e*Math.sin(M)*(1+e*Math.cos(M)); const xv=Math.cos(E)-e, yv=Math.sqrt(1-e*e)*Math.sin(E);
+  const v=Math.atan2(yv,xv), r=Math.hypot(xv,yv), lon=v+w*D2R; return [r*Math.cos(lon), r*Math.sin(lon), 0]; }
+function planetGeo(el,d){ const h=_helio(el,d), sg=_sunGeoR(d);   // geocentric = helio_planet + sun_geo
+  const g=[h[0]+sg[0], h[1]+sg[1], h[2]+sg[2]], dist=Math.hypot(g[0],g[1],g[2]);
+  const sd=1.95+0.85*Math.log10(1+dist);                         // compressed scene distance (inner ring)
+  const m=1/(dist||1);
+  return {pos:[g[0]*m*sd, g[2]*m*sd, g[1]*m*sd], dist:dist};      // ecliptic->scene (swap y/z), like the Moon
+}
 // per-asteroid orbital elements (deterministic from name) — varied directions + real orbits
 const astOrbits=new Map();
 function astParam(n,i){ if(astOrbits.has(n.name))return astOrbits.get(n.name);
@@ -530,10 +566,7 @@ function astPos(o,T){ const M=o.M0+o.sp*T, r=o.a*(1-o.e*o.e)/(1+o.e*Math.cos(M))
 
 function drawGlobe(dt){
   const T=performance.now()/1000; const big=isGlobeBig();
-  // Earth is NOT spun fast: a fast spin would force the Sun to orbit the Earth (the lit
-  // hemisphere must face the Sun). Instead the geography is fixed and the day/night
-  // terminator tracks the real sub-solar point, drifting slowly at the real rate — so the
-  // Sun stays put and the shadow sits at the correct real position (e.g. over your city).
+  earthSpin += dt*6;                          // fast cosmetic spin; the Sun is fixed so it doesn't orbit
   if(!big) yaw += dt*0.10;                     // gentle camera drift when small; user drives when big
   // CRT phosphor burn-in: fade the previous frame instead of clearing, so moving
   // satellites/asteroids/the ISS leave glowing trails. Plain clear when CRT is off.
@@ -552,6 +585,24 @@ function drawGlobe(dt){
     gx.strokeStyle='rgba(255,210,120,0.5)';gx.lineWidth=1;for(let a=0;a<TAU;a+=TAU/12){gx.beginPath();gx.moveTo(sx+Math.cos(a)*sr*1.4,sy+Math.sin(a)*sr*1.4);gx.lineTo(sx+Math.cos(a)*sr*2.0,sy+Math.sin(a)*sr*2.0);gx.stroke();}
     gx.fillStyle='rgba(255,220,150,0.9)';gx.font='10px monospace';gx.textAlign='left';gx.fillText('SOL',sx+sr+4,sy+3);
     if(big) hitTargets.push({x:sx,y:sy,r:sr+8,html:'<div class="nm">SOL</div><div class="ty">G2V main-sequence star</div><div class="rw">distance <b>1 AU · 149.6M km</b></div><div class="rw">declination <b>'+solarDecl().toFixed(1)+'°</b></div><div class="rw">sub-solar lon <b>'+subSolarLon().toFixed(1)+'°</b></div><div class="rw">surface <b>5,778 K</b></div>'}); }
+
+  // ---- planets (real geocentric direction, compressed distance; drift with real time) ----
+  { const pd=(Date.now()/86400000)-10957.5;                 // day number since J2000
+    for(const P of PLANETS){ const g=planetGeo(P.el,pd); const p=projW(g.pos); const px=p[0], py=p[1];
+      const insideEarth=(p[2]<0)&&((px-CX)*(px-CX)+(py-CY)*(py-CY) < R*zoom*R*zoom);
+      if(insideEarth) continue;                              // occluded behind Earth
+      if(px<-40||px>GW+40||py<-40||py>GH+40) continue;
+      const rr=(big?P.rp:P.rp*0.7)*(0.9+0.25*zoom)+1.2;   // bigger so planets pop vs asteroids
+      // faint outer aura ring so planets read as bodies, not dots
+      gx.globalAlpha=(p[2]>0?0.3:0.16); gx.strokeStyle=P.c; gx.lineWidth=1; gx.beginPath(); gx.arc(px,py,rr+2.5,0,TAU); gx.stroke();
+      gx.globalAlpha=p[2]>0?1:0.5;
+      if(P.ring){ gx.strokeStyle=P.c; gx.lineWidth=1.4; gx.globalAlpha=(p[2]>0?0.9:0.4);   // Saturn's ring
+        gx.beginPath(); gx.ellipse(px,py,rr*2.1,rr*0.72,-0.5,0,TAU); gx.stroke(); gx.globalAlpha=p[2]>0?1:0.5; }
+      gx.shadowColor=P.c; gx.shadowBlur=big?10:4; gx.fillStyle=P.c;
+      gx.beginPath(); gx.arc(px,py,rr,0,TAU); gx.fill(); gx.shadowBlur=0; gx.globalAlpha=1;
+      if(big){ gx.fillStyle=P.c; gx.font='9px monospace'; gx.textAlign='left'; gx.fillText(P.n, px+rr+3, py+3);
+        hitTargets.push({x:px,y:py,r:rr+5,html:'<div class="nm">'+P.n+'</div><div class="ty">planet · geocentric</div><div class="rw">distance <b>'+g.dist.toFixed(2)+' AU</b> ('+Math.round(g.dist*149.6)+'M km)</div>'}); }
+    } gx.globalAlpha=1; }
 
   // ---- Moon (real geocentric position, real orbit, real phase) ----
   const moon=lunar(new Date());
