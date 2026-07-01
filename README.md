@@ -30,6 +30,7 @@ It's inspired by the "SENTRY: Near Earth Object Encounters" geocentric displays 
 - **Real asteroids** — live close-approach data from NASA NeoWs, each with its own Keplerian orbit, miss distance in lunar distances (LD), diameter, and velocity. Potentially-hazardous objects glow red.
 - **1,300+ real satellites** — Starlink, GPS, OneWeb, Galileo, GLONASS, weather & GEO birds, fetched as TLEs from Celestrak and propagated client-side (Kepler solve per frame). Colored by constellation, hover to identify.
 - **Live ISS** — true position from the open-notify feed, on its real ground track.
+- **Operator beacon** — your own approximate location (city · state, from IP geolocation) marked on the globe with a NERV crosshair + radar ping.
 - **Day / night Earth** — a real solar-declination terminator sweeps the globe; the lit hemisphere glows amber, the night side dims to blue with city lights.
 - **The real Moon** — `LUNA` is placed at its **actual geocentric position right now** (a lunar-ephemeris computation with the main perturbations), so it sits where the Moon really is relative to Earth, shows the **correct phase** (lit fraction toward the Sun), and rides its real, slowly-shifting orbit. Hover it for live distance + phase.
 - **The Sun** — `SOL` rendered at its true declination with corona + rays.

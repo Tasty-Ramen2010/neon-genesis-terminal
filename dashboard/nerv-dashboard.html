@@ -284,7 +284,7 @@ const DPR=Math.min(window.devicePixelRatio||1,1.6);
 const TPORT=window.NERV_TTYD_PORT||7682, SPORT=window.NERV_SHELL_PORT||7683;
 let S={ready:false,cpu:0,mem:0,net_down:0,net_up:0,disk:0,load:0,ncpu:8,procs:[],git:{repo:false},
   battery:100,charging:true,iface:'en0',uptime:'',host:'',user:'operator',mem_used:0,mem_total:0,
-  conns:[],conn_count:0,iss:null,neo:[],sats:[],spaceweather:null,hubble:null,quakes:[],launch:null};
+  conns:[],conn_count:0,iss:null,neo:[],sats:[],spaceweather:null,hubble:null,quakes:[],launch:null,geo:null};
 const hist={cpu:[],mem:[],net:[],disk:[]}; const HL=70; function pushH(k,v){const a=hist[k];a.push(v);if(a.length>HL)a.shift();}
 
 /* ============ AUDIO (safe single context) ============ */
@@ -672,6 +672,22 @@ function drawGlobe(dt){
     if(alertQ){ gx.fillStyle='rgba(255,59,59,'+(0.6+0.4*Math.sin(T*3))+')'; gx.font='11px monospace'; gx.textAlign='left';
       gx.fillText('⚠ SEISMIC · M'+alertQ.mag.toFixed(1)+' · '+alertQ.place.slice(0,34), 12, GH-12); }
   }
+
+  // ---- operator location (approx, IP geolocation) — a NERV beacon on the surface ----
+  if(S.geo){ const g=S.geo; const e=earthVec(g.lat,g.lon); const p=view([e[0]*1.01,e[1]*1.01,e[2]*1.01]);
+    if(p[2]>0){ const q=[CX+p[0]*R*zoom, CY-p[1]*R*zoom]; const pulse=(T*0.9)%1;    // expanding radar ping
+      gx.strokeStyle='rgba(70,232,138,'+(0.6*(1-pulse))+')'; gx.lineWidth=1.4;
+      gx.beginPath(); gx.arc(q[0],q[1], 3+pulse*(big?16:9), 0, TAU); gx.stroke();
+      gx.fillStyle='#46e88a'; gx.shadowColor='#46e88a'; gx.shadowBlur=8;
+      gx.beginPath(); gx.arc(q[0],q[1],2.6,0,TAU); gx.fill(); gx.shadowBlur=0;
+      // crosshair reticle
+      gx.strokeStyle='rgba(70,232,138,0.85)'; gx.lineWidth=1;
+      gx.beginPath(); gx.moveTo(q[0]-7,q[1]); gx.lineTo(q[0]-3,q[1]); gx.moveTo(q[0]+3,q[1]); gx.lineTo(q[0]+7,q[1]);
+      gx.moveTo(q[0],q[1]-7); gx.lineTo(q[0],q[1]-3); gx.moveTo(q[0],q[1]+3); gx.lineTo(q[0],q[1]+7); gx.stroke();
+      const label=(g.city?g.city+' · ':'')+(g.region||g.country||'');
+      gx.fillStyle='rgba(70,232,138,0.95)'; gx.font='10px monospace'; gx.textAlign='left';
+      gx.fillText('◎ '+label, q[0]+9, q[1]+3);
+      if(big) hitTargets.push({x:q[0],y:q[1],r:10,html:'<div class="nm">NERV · OPERATOR</div><div class="ty">this terminal · approx. location</div><div class="rw">'+label+'</div><div class="rw">'+g.lat.toFixed(2)+'°, '+g.lon.toFixed(2)+'°</div>'}); } }
 
   // ---- NEO asteroids: real NASA data, individual 3D orbits, varied directions ----
   const neo=S.neo||[]; gx.textAlign='left';

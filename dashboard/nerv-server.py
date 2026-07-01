@@ -248,6 +248,7 @@ class Sampler(threading.Thread):
         self.hubble = None   # Hubble Space Telescope orbital elements (Celestrak)
         self.quakes = []     # live USGS earthquakes
         self.launch = None   # next upcoming orbital launch (Launch Library 2)
+        self.geo = None      # approximate operator location (IP geolocation)
 
     def _memtotal(self):
         if MAC: return int(sh(["sysctl","-n","hw.memsize"]).strip() or 1)
@@ -531,6 +532,12 @@ class Sampler(threading.Thread):
                          "provider":(r.get("launch_service_provider") or {}).get("name","") if isinstance(r.get("launch_service_provider"),dict) else (r.get("provider") or ""),
                          "pad":(r.get("pad") or {}).get("name","") if isinstance(r.get("pad"),dict) else ""}
         except Exception: pass
+    def fetch_geo(self):
+        # approximate operator location from IP geolocation (city/region granularity, keyless)
+        j=get_json("http://ip-api.com/json/?fields=status,country,regionName,city,lat,lon", timeout=6)
+        if j and j.get("status")=="success" and j.get("lat") is not None:
+            self.geo={"lat":j["lat"],"lon":j["lon"],"city":j.get("city",""),
+                      "region":j.get("regionName",""),"country":j.get("country","")}
     def fetch_iss(self):
         j=get_json("http://api.open-notify.org/iss-now.json", timeout=5)   # fast, keyless, works here
         if j and j.get("iss_position"):
@@ -604,6 +611,9 @@ class Sampler(threading.Thread):
                 if c==8 or c%600==70:    # next launch — ~ every 15 min
                     try: self.fetch_launch()
                     except Exception: pass
+                if c==9 or c%7200==90:   # operator location — once, refresh ~2h
+                    try: self.fetch_geo()
+                    except Exception: pass
                 snap={"ready":True,"t":time.time(),"cpu":round(cpu,1),"ncpu":self.ncpu,
                     "mem":mempct,"mem_used":memu,"mem_total":memt,
                     "net_down":round(down),"net_up":round(up),"iface":self.iface,
@@ -615,7 +625,8 @@ class Sampler(threading.Thread):
                     "net_procs":netprocs,"mem_detail":memd,
                     "iss":self.iss,"neo":self.neo,
                     "spaceweather":self.spaceweather,"sats":self.sats,
-                    "hubble":self.hubble,"quakes":self.quakes,"launch":self.launch}
+                    "hubble":self.hubble,"quakes":self.quakes,"launch":self.launch,
+                    "geo":self.geo}
                 with _lock: _stats.clear(); _stats.update(snap)
             except Exception as e:
                 with _lock: _stats["error"]=str(e)
