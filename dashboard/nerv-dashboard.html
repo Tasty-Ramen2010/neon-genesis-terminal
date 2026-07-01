@@ -586,8 +586,10 @@ function drawGlobe(dt){
     gx.fillStyle='rgba(255,220,150,0.9)';gx.font='10px monospace';gx.textAlign='left';gx.fillText('SOL',sx+sr+4,sy+3);
     if(big) hitTargets.push({x:sx,y:sy,r:sr+8,html:'<div class="nm">SOL</div><div class="ty">G2V main-sequence star</div><div class="rw">distance <b>1 AU · 149.6M km</b></div><div class="rw">declination <b>'+solarDecl().toFixed(1)+'°</b></div><div class="rw">sub-solar lon <b>'+subSolarLon().toFixed(1)+'°</b></div><div class="rw">surface <b>5,778 K</b></div>'}); }
 
-  // ---- planets (real geocentric direction, compressed distance; drift with real time) ----
-  { const pd=(Date.now()/86400000)-10957.5;                 // day number since J2000
+  // ---- planets (real geocentric direction; start at the true position now, then orbit
+  //      slowly on an accelerated clock — ~0.15 sim-days/sec, so Mercury laps in ~10 min
+  //      and the outer worlds creep. Relative speeds stay real (Kepler): inner fast, outer slow. ----
+  { const pd=(Date.now()/86400000)-10957.5 + T*0.15;        // real day-number + gentle accelerated drift
     for(const P of PLANETS){ const g=planetGeo(P.el,pd); const p=projW(g.pos); const px=p[0], py=p[1];
       const insideEarth=(p[2]<0)&&((px-CX)*(px-CX)+(py-CY)*(py-CY) < R*zoom*R*zoom);
       if(insideEarth) continue;                              // occluded behind Earth
