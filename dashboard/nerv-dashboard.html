@@ -777,7 +777,7 @@ function drawGlobe(dt){
     const s=clamp(3+Math.log10(1+n.dia)*2.3,3,14);
     gx.fillStyle=o.col; gx.shadowBlur=(n.hazard||o.important)?7:0; if(gx.shadowBlur)gx.shadowColor=o.col; gx.globalAlpha=p[2]>0?1:0.5;
     gx.beginPath();gx.moveTo(px,py-s);gx.lineTo(px+s,py);gx.lineTo(px,py+s);gx.lineTo(px-s,py);gx.closePath();gx.fill();gx.shadowBlur=0;gx.globalAlpha=1;
-    if(s>5){gx.strokeStyle='rgba(0,0,0,0.45)';gx.lineWidth=1;for(let yy=-s+2;yy<s;yy+=2){gx.beginPath();gx.moveTo(px-s,py+yy);gx.lineTo(px+s,py+yy);gx.stroke();}}
+    if(s>5){gx.strokeStyle='rgba(0,0,0,0.45)';gx.lineWidth=1;for(let yy=-s+2;yy<s;yy+=2){const hw=s-Math.abs(yy);gx.beginPath();gx.moveTo(px-hw,py+yy);gx.lineTo(px+hw,py+yy);gx.stroke();}}
     if((big&&i<18)||(!big&&i<3)){ gx.font='9px monospace'; gx.fillStyle=o.col; gx.fillText(n.name,px+s+3,py-1);
       gx.fillStyle='rgba(180,180,190,0.65)'; gx.fillText(n.miss_lunar+' LD',px+s+3,py+9); }
     if(big) hitTargets.push({x:px,y:py,r:Math.max(7,s+3),html:'<div class="nm">'+n.name+'</div><div class="ty">near-earth asteroid</div><div class="rw">miss distance <b>'+n.miss_lunar+' LD</b> ('+(n.miss_km/1e6).toFixed(2)+'M km)</div><div class="rw">diameter <b>'+n.dia+' m</b></div><div class="rw">velocity <b>'+n.vel.toLocaleString()+' km/h</b></div>'+(n.hazard?'<div class="haz">⚠ POTENTIALLY HAZARDOUS</div>':'')});
