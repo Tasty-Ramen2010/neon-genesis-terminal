@@ -401,10 +401,14 @@ function projW(v){ const p=view(v); return [CX+p[0]*R*zoom, CY-p[1]*R*zoom, p[2]
 function earthVec(lat,lon){ const la=lat*Math.PI/180, lo=(lon+earthSpin)*Math.PI/180;   // spins on its axis
   return [Math.cos(la)*Math.sin(lo), Math.sin(la), Math.cos(la)*Math.cos(lo)]; }
 
-const CONTS=[{lo:-100,la:45,rl:33,rt:20},{lo:-62,la:-18,rl:15,rt:26},{lo:18,la:8,rl:20,rt:34},
-  {lo:18,la:50,rl:22,rt:11},{lo:95,la:45,rl:48,rt:26},{lo:134,la:-25,rl:17,rt:11},{lo:-42,la:72,rl:14,rt:8}];
-const LAND=[]; for(const c of CONTS){for(let lo=c.lo-c.rl;lo<=c.lo+c.rl;lo+=5)for(let la=c.la-c.rt;la<=c.la+c.rt;la+=5){
-  const u=(lo-c.lo)/c.rl,v=(la-c.la)/c.rt; if(u*u+v*v<=1)LAND.push([lo,la]); } }
+// Real continents: a 2\u00b0 land mask (Natural Earth 110m, rasterized) decoded into
+// precomputed unit base-vectors so the land render stays trig-free per frame.
+const LANDMASK="/////////////////////////////////////////////////////////////wH8/////////////////////////w8A/v////////////////////////8BAAD/////fwAA////////////////AwAA/////38A4PD///////////////8AAID/////BwAA+P//////////////DwAAAP//8v8/AADg//////////////8BAAAAAMAhAA8AAPj/////////////fwAAAAAAAAB8AAAAgP/////8//////8DAAAAAAAAAAMAAAAAAMj/H/7/////AAAAAAAAAAAwAAAAAAAAgAcABP/5fwAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAeAAAAAAAAAAAAAAAAAAAAAAAAAAAA4AEAAAAAAAAAAAAAAAAAwAAAAAAAAAA8AAAAAAAAAAAAAAAAAAAYAAAAAAAA4AUAAAAAAAAAAAAAAAAIAAEAAAAAAAB+AAAAAAAAAAAAAAAAAABgAAAAAAAA4D8AAAAAAAAAAAAAAAAfAAIAAAAAAAD8AQAAAAAAAAAAAAAB+AEAAAAAAAAAwP8AAAAA+AAAAAAA8OA/AAAAAAAAAAD8HwAAAIAfAAAAAAD//wcAAAAAAAAAwP8BAAAA/AMAAAAA+P9/AAAAAAAAAAD4PwAAAMA/AAAAAID//wcAAAAAAAAAgP8DAAAA/gcAAAAA+P8/AAAAAAAAAAD4/wAAAOD/MAAAAID//wEAAAAAAAAAgP8/AAAA/g8DAAAA8P8fAAAAAAAAAAD4/wMAAPD/cAAAAAD4fwAAAAAAAAAAwP8/AAAA/x8HAAAAgH8GAAAAAAAAAAD//wcAAPD/QwAAAADwYwAAAAAAAAAA8P9/AAAA/z8EAAAAADgCAAAAAAAAAID//wcAAOD/AwAAAAAAAAAAAAAAAAAA+P//AAAA/z8AAAAAAAELAAAAAAAAAMD//x8AAPD/AwAAADgA+AAAAAAAAAAA/v//AAAA/z8AAAAAAIAHAAAAAAAAAMD//wMAAPj/AwAAAOYEHQAAAAAAAAAA/P8HAADA/38AAAAwHhAAAAAAAAAAAMD/HwAAAPj/DwAAgOEFAAAAAAAAAAAA+P8BAACA//8BAAAoHAAAAAAAAAAAAID/DwAAFv7/PwAAQIMBAAAAAAAAAAAA+B8AAPD///8HAAQAAAEAAAAAAAAAAFD/AACA////fwBQgAQAAAAAAAAAAACA8AAAAPz///8MAAPIAAAAAAAAAAAAAAwAAADA////FwA4gB8AAAAAAAAAAADwAAAAAPz//78HgAP4QAAAAAAAAAAA8AMAAADA////+QF44A8EAAAAAAAAAMAzQAAAAPz//59/wA9+AAAAAAAAAAAAHoYAAADA/////Qf+8w8AAAAAAAAAAOABAwAAAPz//+//4P//DwAAAAAAAABAHwAAAACA//9//oL///8DAAAAAAAAAPoBAgAAAPj///fn////PwAAAAAAAADAPyAAAAAA/v//v/////8HAAAAAAAAAP//AQAAAOD/9/7/////fwAAAAAAAAD4/z8AAAAA/A8A//////+DAAAAAAAAwP//DwAAAIB/APD/////P/IAAAAAAAD+//8AAAAAGA7w//////9nDAAAAAAA8P//DwAAAOADtP//////HwIBAAAAAAD///8DAAAAPGDv//////9/EAAAAAAA8P//fwAAAOCP+cD//////x8DAAAAAAD///9vAAAA4O+f/v//////AwAAAAAA8P///wMAAAD+/////////38CAAAAAAD+//8vBgAA4P//////////LwAAAAAA/P///z8AAAD7//////////8CAAAAAOD//5//AwAANP//////////PxAAAAEA/v//+R8AAMBB8P///////z8ABwCAAPj//wF/AAAAGDT+////////B/AAAB7g//8HeAIAAADgx/////////9BBAD4+///f4AHAAAAAH7+/////////08PAP////8fwAIeAADA5////////////w/4/////4sf8AN4APB5/f//////////B///////4YP/AQAA/n/9v////////w/w//0HgBsP8P8BAID/AHD7///////7ABgAgD/MPwD/XwAAwAAAuP////c/AQAAAAAXER4A/P8HAAAAAAPA//83AAAAAAAAAAAAAOD//wAAAADAAOD/AwAAAAAAAAAMQAD8//8fAAAAAAAAAAYAAAAAAAAAAECAD////wAAHwAAAAAwAAAAAAAAAAAAgP7P//9/AAAAAAAAIAAAAAAAAAAAAAAA/gHwPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+const LANDV=[]; { const bin=atob(LANDMASK), COLS=180, ROWS=91, ST=2, D=Math.PI/180;
+  const bit=i=>(bin.charCodeAt(i>>3)>>(i&7))&1;
+  for(let ri=0;ri<ROWS;ri++)for(let ci=0;ci<COLS;ci++){ if(!bit(ri*COLS+ci))continue;
+    const lon=(-180+ST*ci+ST/2)*D, la=(-90+ST*ri+ST/2)*D, cla=Math.cos(la);
+    LANDV.push([cla*Math.sin(lon), Math.sin(la), cla*Math.cos(lon), (ci+ri)&1]); } }
 const STARS=[]; { let x=777; const rnd=()=>{x=(x*1103515245+12345)&0x7fffffff;return x/0x7fffffff;}; for(let i=0;i<70;i++)STARS.push([rnd(),rnd(),rnd()]); }
 
 // ---- REAL satellites (Celestrak TLE -> approx Keplerian, propagated client-side) ----
@@ -566,12 +570,17 @@ function drawGlobe(dt){
   gx.strokeStyle='rgba(232,161,60,0.22)'; gx.lineWidth=1;
   for(let mlon=0;mlon<180;mlon+=30){gx.beginPath();let st=false;for(let la=-90;la<=90;la+=8){const p=view(earthVec(la,mlon));if(p[2]<=0){st=false;continue;}const q=[CX+p[0]*R*zoom,CY-p[1]*R*zoom];st?gx.lineTo(q[0],q[1]):gx.moveTo(q[0],q[1]);st=true;}gx.stroke();}
   for(let la=-60;la<=60;la+=30){gx.beginPath();let st=false;for(let lo=0;lo<=360;lo+=8){const p=view(earthVec(la,lo));if(p[2]<=0){st=false;continue;}const q=[CX+p[0]*R*zoom,CY-p[1]*R*zoom];st?gx.lineTo(q[0],q[1]):gx.moveTo(q[0],q[1]);st=true;}gx.stroke();}
-  for(const L of LAND){const ev=earthVec(L[1],L[0]); const p=view(ev); if(p[2]<=0)continue;
-    const lit=dot3(ev,sd);                                  // >0 day side, <0 night side
-    const X=CX+p[0]*R*zoom-0.9, Y=CY-p[1]*R*zoom-0.9;
-    if(lit>0.02){ gx.fillStyle='rgba(255,150,40,'+(0.4+0.5*lit)*(0.5+0.5*p[2])+')'; gx.fillRect(X,Y,2,2); }
-    else { gx.fillStyle='rgba(70,170,200,'+(0.18+0.12*p[2])+')'; gx.fillRect(X,Y,1.6,1.6);   // night landmass
-      if((L[0]+L[1])%15===0){gx.fillStyle='rgba(120,240,255,0.8)';gx.fillRect(X,Y,1.3,1.3);} } }   // city lights
+  { // real continents — day/night shaded, trig-free per point (see LANDV)
+    const spinR=earthSpin*Math.PI/180, A=spinR+yaw, cA=Math.cos(A), sA=Math.sin(A), cP=Math.cos(pitch), sP=Math.sin(pitch);
+    const sdl=rotY(sd,-spinR), RZ=R*zoom;                   // sun dir in unspun frame for lighting
+    for(const v of LANDV){ const x=v[0],y=v[1],z=v[2];
+      const rz=-x*sA+z*cA, pz=y*sP+rz*cP; if(pz<=0) continue;   // behind the globe
+      const rx=x*cA+z*sA, py=y*cP-rz*sP;
+      const lit=x*sdl[0]+y*sdl[1]+z*sdl[2];
+      const X=CX+rx*RZ-0.9, Y=CY-py*RZ-0.9;
+      if(lit>0.02){ gx.fillStyle='rgba(255,150,40,'+((0.4+0.5*lit)*(0.5+0.5*pz))+')'; gx.fillRect(X,Y,2,2); }
+      else { gx.fillStyle='rgba(70,170,200,'+(0.18+0.12*pz)+')'; gx.fillRect(X,Y,1.6,1.6);   // night landmass
+        if(v[3] && lit>-0.3){ gx.fillStyle='rgba(120,240,255,0.7)'; gx.fillRect(X,Y,1.2,1.2); } } } }   // city lights
   // ---- day/night terminator (great circle where sun grazes horizon) ----
   { const ref=Math.abs(sd[1])<0.9?[0,1,0]:[1,0,0];
     const t1=(()=>{const a=[sd[1]*ref[2]-sd[2]*ref[1],sd[2]*ref[0]-sd[0]*ref[2],sd[0]*ref[1]-sd[1]*ref[0]];const m=Math.hypot(a[0],a[1],a[2]);return [a[0]/m,a[1]/m,a[2]/m];})();
