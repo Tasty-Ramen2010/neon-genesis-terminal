@@ -427,12 +427,20 @@ function satPos(s,T){ let M=s.M0+s.n*T; M%=TAU;
   const a=s.r, xp=a*(Math.cos(E)-s.e), yp=a*Math.sqrt(1-s.e*s.e)*Math.sin(E);
   let p=[xp,yp,0]; p=rotZ(p,s.argp); p=rotX(p,s.inc); p=rotZ(p,s.raan); return p; }  // perifocal -> ECI (earth radii)
 
-// ---- Sun + day/night terminator ----
+// ---- Sun + REAL day/night terminator ----
 function solarDecl(){ const now=new Date(); const start=Date.UTC(now.getUTCFullYear(),0,0);
   const doy=(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate())-start)/86400000;
-  return -23.44*Math.cos(D2R*(360/365)*(doy+10))*D2R; }   // radians, real-ish declination from date
-// Sun held at a fixed inertial longitude; earthSpin sweeps the lit hemisphere -> stylized day/night cycle.
-function sunDir(){ const d=solarDecl(); return [Math.cos(d)*Math.sin(0.6), Math.sin(d), Math.cos(d)*Math.cos(0.6)]; }
+  return -23.44*Math.cos(D2R*(360/365)*(doy+10)); }   // DEGREES, real-ish declination from date
+// Real sub-solar longitude from UTC: the geographic longitude with the Sun straight overhead
+// right now. Advances -15°/hr (real time). Because the Sun is placed with earthVec (which
+// includes the cosmetic earthSpin), it CO-ROTATES with the fast spin — so the day/night
+// terminator stays fixed on the real geography (e.g. through Atlanta at the real local hour)
+// and drifts only slowly, in real time. The fast spin is purely for looks; it does NOT drive
+// the shading, since dot(earthVec(place), sunDir) is independent of earthSpin.
+function subSolarLon(){ const n=new Date();
+  const s=n.getUTCHours()*3600+n.getUTCMinutes()*60+n.getUTCSeconds();
+  return 180-(s/86400)*360; }
+function sunDir(){ return earthVec(solarDecl(), subSolarLon()); }
 function dot3(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
 function cross3(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
 function norm3(a){ const m=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/m,a[1]/m,a[2]/m]; }
@@ -522,7 +530,7 @@ function astPos(o,T){ const M=o.M0+o.sp*T, r=o.a*(1-o.e*o.e)/(1+o.e*Math.cos(M))
 
 function drawGlobe(dt){
   const T=performance.now()/1000; const big=isGlobeBig();
-  earthSpin += dt*8;                          // earth axial spin
+  earthSpin += dt*5;                          // cosmetic fast spin (~72s/rev); does NOT drive day/night
   if(!big) yaw += dt*0.18;                     // gentle auto-rotate when small; user drives when big
   // CRT phosphor burn-in: fade the previous frame instead of clearing, so moving
   // satellites/asteroids/the ISS leave glowing trails. Plain clear when CRT is off.
@@ -540,7 +548,7 @@ function drawGlobe(dt){
     gx.fillStyle='#ffe9a8';gx.beginPath();gx.arc(sx,sy,sr,0,TAU);gx.fill();
     gx.strokeStyle='rgba(255,210,120,0.5)';gx.lineWidth=1;for(let a=0;a<TAU;a+=TAU/12){gx.beginPath();gx.moveTo(sx+Math.cos(a)*sr*1.4,sy+Math.sin(a)*sr*1.4);gx.lineTo(sx+Math.cos(a)*sr*2.0,sy+Math.sin(a)*sr*2.0);gx.stroke();}
     gx.fillStyle='rgba(255,220,150,0.9)';gx.font='10px monospace';gx.textAlign='left';gx.fillText('SOL',sx+sr+4,sy+3);
-    if(big) hitTargets.push({x:sx,y:sy,r:sr+8,html:'<div class="nm">SOL</div><div class="ty">G2V main-sequence star</div><div class="rw">distance <b>1 AU · 149.6M km</b></div><div class="rw">declination <b>'+(solarDecl()/D2R).toFixed(1)+'°</b></div><div class="rw">surface <b>5,778 K</b></div>'}); }
+    if(big) hitTargets.push({x:sx,y:sy,r:sr+8,html:'<div class="nm">SOL</div><div class="ty">G2V main-sequence star</div><div class="rw">distance <b>1 AU · 149.6M km</b></div><div class="rw">declination <b>'+solarDecl().toFixed(1)+'°</b></div><div class="rw">sub-solar lon <b>'+subSolarLon().toFixed(1)+'°</b></div><div class="rw">surface <b>5,778 K</b></div>'}); }
 
   // ---- Moon (real geocentric position, real orbit, real phase) ----
   const moon=lunar(new Date());
