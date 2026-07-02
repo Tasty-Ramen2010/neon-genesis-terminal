@@ -357,10 +357,11 @@ function burnStamp(d){ if(!term)return; const g=cellGeom();               // bur
 function burnLoop(now){ requestAnimationFrame(burnLoop); if(!bctx)return;
   bctx.clearRect(0,0,bcv.width,bcv.height);
   if(!burns.length)return;
+  const LIFE=0.85;
   for(let i=burns.length-1;i>=0;i--){ const b=burns[i]; const age=(now-b.t)/1000;
-    if(age>=1){ burns.splice(i,1); continue; }
-    const a=(1-age); bctx.fillStyle='rgba(120,255,180,'+(0.42*a)+')'; bctx.fillRect(b.x,b.y,b.w,b.h);
-    bctx.fillStyle='rgba(180,255,210,'+(0.30*a)+')'; bctx.fillRect(b.x+b.w*0.18,b.y+b.h*0.12,b.w*0.64,b.h*0.72); } }
+    if(age>=LIFE){ burns.splice(i,1); continue; }
+    const a=1-age/LIFE, al=a*a*0.20;                       // soft, quick-fading phosphor glow (was a hard 0.42+0.30 double block)
+    bctx.fillStyle='rgba(130,255,185,'+al+')'; bctx.fillRect(b.x+0.5,b.y+0.5,Math.max(1,b.w-1),Math.max(1,b.h-1)); } }
 function setTerm(mode){ termConnect(mode); uiBlip(); }
 $('#btnClaude').onclick=()=>setTerm('claude'); $('#btnShell').onclick=()=>setTerm('shell');
 $('#btnRestart').onclick=()=>{ termConnect(termMode); uiBlip(); };
@@ -983,6 +984,14 @@ function bootSeq(){
 function boot(){
   applyScale(); applyCrt(); place(); initTerm(); sizeGlobe(); buildMon(); buildMonBig(); layoutMon();
   let rsz; window.addEventListener('resize',()=>{ clearTimeout(rsz); rsz=setTimeout(()=>{ sizeGlobe(); layoutMon(); sizeBig(); termFit(); },120); });   // debounced
+  // Re-fit exactly when a panel's box actually changes size (fullscreen, un-fullscreen, panel swap) —
+  // more reliable than a fixed timeout, which fired before layout settled and left the terminal mis-sized.
+  if(window.ResizeObserver){
+    let tf; const roTerm=new ResizeObserver(()=>{ cancelAnimationFrame(tf); tf=requestAnimationFrame(()=>{ termFit(); }); });
+    const th=$('#termhost'); if(th) roTerm.observe(th);
+    let gf; const roGlobe=new ResizeObserver(()=>{ cancelAnimationFrame(gf); gf=requestAnimationFrame(()=>{ sizeGlobe(); }); });
+    const gp=gc&&gc.parentElement; if(gp) roGlobe.observe(gp);
+  }
   todoLoad(); poll(); setInterval(poll,1500); setInterval(clock,1000); clock(); setInterval(todoLoad,5000);
   cosmicTick(); setInterval(cosmicTick,160);
   requestAnimationFrame(frame);

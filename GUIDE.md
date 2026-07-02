@@ -24,9 +24,16 @@ launcher to `~/.local/bin/nerv-dash`.
 | Platform | Command |
 |----------|---------|
 | **macOS (native app)** | `open /Applications/NERV.app` |
+| **Linux (app window)** | `~/.config/nerv-theme/dashboard/nerv-app-linux.sh` — or pick **NERV Console** from your app menu |
+| **Windows (app window)** | `dashboard\nerv-app-windows.bat` (needs Python 3 on PATH; use WSL for the full terminal) |
 | **macOS / Linux (browser)** | `nerv-dash` |
-| **Any OS (portable)** | `python3 ~/.config/nerv-theme/dashboard/nerv-launch.py` |
-| **Windows** | `python dashboard\nerv-launch.py` (from the repo) — or use WSL for the full terminal |
+| **Any OS (portable app window)** | `python3 ~/.config/nerv-theme/dashboard/nerv-launch.py --app` |
+| **Any OS (portable, browser)** | `python3 ~/.config/nerv-theme/dashboard/nerv-launch.py` |
+
+The **app window** launchers open a chromeless standalone window via Chrome / Edge / Chromium
+(`--app` mode), so it feels native without a heavy runtime. If no Chromium-family browser is
+found they fall back to your default browser. On Windows, run under **WSL** to get the full
+PTY terminal (native Windows uses a simpler pipe shell).
 
 ---
 

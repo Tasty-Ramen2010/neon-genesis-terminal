@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=NERV Console
+GenericName=Geocentric Object Tracker
+Comment=Evangelion/NERV-themed developer console with a live geocentric map
+Exec=__DASH__/nerv-app-linux.sh
+Icon=__DASH__/NERV-icon.png
+Terminal=false
+Categories=Utility;Development;Science;
+Keywords=nerv;magi;space;terminal;asteroids;

@@ -1,0 +1,66 @@
+# NERV / MAGI retrofuturist prompt  —  pairs with cool-retro-term amber phosphor.
+# Palette: amber #ff8b00 · green phosphor #39ff14 · alert red #ff2d2d · dim #5c5c5c
+# Designed to read well even when cool-retro-term tints toward amber.
+
+add_newline = true
+command_timeout = 800
+
+format = """
+[╭─](#5c5c5c)[ NERV ](bold #ff8b00)[▸](#00e5ff) $directory$git_branch$git_status$python$nodejs$rust$conda$cmd_duration
+[╰─](#5c5c5c)$character"""
+
+[character]
+success_symbol = "[◆](bold #00e5ff)"
+error_symbol = "[◆](bold #ff2d2d)"
+vimcmd_symbol = "[◇](bold #39ff14)"
+
+[directory]
+style = "bold #00e5ff"
+format = "[$path]($style)[$read_only]($read_only_style) "
+read_only = " ⊘"
+read_only_style = "#ff2d2d"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[git_branch]
+symbol = "⎇ "
+style = "#ff8b00"
+format = "[\\[](#5c5c5c)[$symbol$branch]($style)[\\]](#5c5c5c) "
+
+[git_status]
+style = "#ff2d2d"
+format = "[$all_status$ahead_behind]($style) "
+conflicted = "✗"
+ahead = "▲${count}"
+behind = "▼${count}"
+diverged = "⇕▲${ahead_count}▼${behind_count}"
+untracked = "?${count}"
+modified = "●${count}"
+staged = "+${count}"
+stashed = "≡${count}"
+deleted = "✘${count}"
+
+[cmd_duration]
+min_time = 2000
+style = "#ff5fd2"
+format = "[▰ $duration]($style) "
+
+[python]
+symbol = "py "
+style = "#39ff14"
+format = '[\($symbol$version $virtualenv\)]($style) '
+
+[conda]
+symbol = "◉ "
+style = "#39ff14"
+format = "[$symbol$environment]($style) "
+
+[nodejs]
+symbol = "node "
+style = "#39ff14"
+format = "[$symbol$version]($style) "
+
+[rust]
+symbol = "rs "
+style = "#ff8b00"
+format = "[$symbol$version]($style) "

@@ -65,9 +65,26 @@ cp "$HERE/dashboard/nerv-dash"           "$DASH/"
 cp "$HERE/dashboard/term-launch"         "$DASH/"
 cp "$HERE/dashboard/shell-launch"        "$DASH/"
 cp "$HERE/dashboard/nerv-launch.py"      "$DASH/"   # portable launcher (any OS)
+cp "$HERE/dashboard/nerv-app-linux.sh"   "$DASH/"   # Linux app-window launcher
+cp "$HERE/dashboard/nerv-app-windows.bat" "$DASH/"  # Windows app-window launcher
+cp "$HERE/dashboard/nerv-app.desktop.in" "$DASH/"   # Linux desktop-entry template
+cp "$HERE/dashboard/nerv-banner.sh"      "$DASH/"   # NERV MAGI banner (app terminal only)
+cp "$HERE/dashboard/starship.toml"       "$DASH/"   # NERV MAGI prompt (app terminal only)
+[ -f "$HERE/NERV-icon.png" ] && cp "$HERE/NERV-icon.png" "$DASH/"   # icon for the Linux desktop entry
+mkdir -p "$DASH/appshell"; cp "$HERE"/dashboard/appshell/.z* "$DASH/appshell/" 2>/dev/null   # app-only shell profile
 mkdir -p "$DASH/vendor"; cp "$HERE"/dashboard/vendor/* "$DASH/vendor/"   # xterm.js terminal
-chmod +x "$DASH/nerv-dash" "$DASH/term-launch" "$DASH/shell-launch" "$DASH/nerv-server.py" "$DASH/nerv-launch.py"
+chmod +x "$DASH/nerv-dash" "$DASH/term-launch" "$DASH/shell-launch" "$DASH/nerv-server.py" \
+         "$DASH/nerv-launch.py" "$DASH/nerv-app-linux.sh" "$DASH/nerv-banner.sh"
 ok "dashboard files copied"
+
+# ---- 3b. Linux desktop entry (adds "NERV Console" to the app menu) -------
+if [ "$OS" = "Linux" ]; then
+  APPS="$HOME/.local/share/applications"; mkdir -p "$APPS"
+  sed "s#__DASH__#$DASH#g" "$DASH/nerv-app.desktop.in" > "$APPS/nerv-console.desktop"
+  chmod +x "$APPS/nerv-console.desktop" 2>/dev/null || true
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS" >/dev/null 2>&1 || true
+  ok "desktop entry installed → $APPS/nerv-console.desktop"
+fi
 
 mkdir -p "$BIN"
 ln -sf "$DASH/nerv-dash" "$BIN/nerv-dash"
@@ -76,11 +93,16 @@ case ":$PATH:" in *":$BIN:"*) :;; *) warn "$BIN is not on your PATH — add it t
 
 # ---- 4. build NERV.app (macOS only) -------------------------------------
 if [ "$IS_MAC" != "1" ]; then
-  say "${CYAN}▸ Skipping native app (macOS only).${RST}"
-  say "  On this platform, launch the console with:"
-  say "    ${CYAN}python3 $DASH/nerv-launch.py${RST}        ${DIM}(portable, any OS)${RST}"
-  [ "$OS" = "Linux" ] && say "    ${CYAN}nerv-dash${RST}                              ${DIM}(bash launcher)${RST}"
-  printf "\n${GRN}✓ Console installed.${RST} Run one of the commands above, then your browser opens the deck.\n"
+  say "${CYAN}▸ Skipping native macOS app (that build is macOS-only).${RST}"
+  say "  Launch the console with an app-style window (Chrome/Edge/Chromium):"
+  if [ "$OS" = "Linux" ]; then
+    say "    ${CYAN}$DASH/nerv-app-linux.sh${RST}     ${DIM}(or pick “NERV Console” from your app menu)${RST}"
+    say "    ${CYAN}nerv-dash${RST}                              ${DIM}(bash launcher, opens your browser)${RST}"
+  else
+    say "    ${CYAN}dashboard\\nerv-app-windows.bat${RST}        ${DIM}(Windows app window)${RST}"
+  fi
+  say "    ${CYAN}python3 $DASH/nerv-launch.py --app${RST}   ${DIM}(portable app window, any OS)${RST}"
+  printf "\n${GRN}✓ Console installed.${RST} Run one of the commands above to open the deck.\n"
   exit 0
 fi
 say "${CYAN}▸ Building NERV.app…${RST}"

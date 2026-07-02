@@ -1,8 +1,27 @@
 #!/bin/sh
-# Plain interactive login shell for the SHELL terminal. POSIX-sh compatible so it
+# Interactive shell for the SHELL terminal inside the NERV app. POSIX-sh compatible so it
 # runs the same on macOS and Linux; the embedded server execs it via /bin/sh.
+#
+# NERV branding (MAGI banner + prompt) lives HERE — scoped to the app only — so the user's
+# regular terminal (~/.zshrc) stays completely clean.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.bun/bin:$PATH"
+HERE="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 cd "${NERV_PROJECT:-$HOME}" 2>/dev/null
 clear 2>/dev/null
+
+# ---- NERV / MAGI boot banner (app terminal only) ----
+if [ -f "$HERE/nerv-banner.sh" ]; then
+  if command -v bash >/dev/null 2>&1; then NERV_BANNER=1 bash "$HERE/nerv-banner.sh" 2>/dev/null
+  else NERV_BANNER=1 sh "$HERE/nerv-banner.sh" 2>/dev/null; fi
+fi
+
+# ---- NERV MAGI prompt via an app-only zsh profile (never edits ~/.zshrc) ----
+if command -v zsh >/dev/null 2>&1 && [ -d "$HERE/appshell" ]; then
+  export NERV_DASH_DIR="$HERE"
+  export ZDOTDIR="$HERE/appshell"
+  exec zsh -il
+fi
+
+# Fallback (no zsh): plain interactive login shell, banner already shown above.
 SH="${SHELL:-/bin/bash}"
 exec "$SH" -il
