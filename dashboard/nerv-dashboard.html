@@ -347,15 +347,16 @@ function termConnect(mode){
 function termFit(){ if(!fitAddon||!term)return; try{ fitAddon.fit(); }catch(e){}
   if(ws&&ws.readyState===1) ws.send(JSON.stringify({resize:[term.cols,term.rows]})); sizeBurn(); }
 function sizeBurn(){ if(!bcv)return; const h=$('#termhost'); bcv.width=Math.max(2,h.clientWidth*DPR); bcv.height=Math.max(2,h.clientHeight*DPR); bctx.setTransform(DPR,0,0,DPR,0,0); }
-function cellSize(){ const s=$('#xterm').querySelector('.xterm-screen'); const el=s||$('#xterm');
-  return { w: el.clientWidth/(term.cols||80), h: el.clientHeight/(term.rows||24) }; }
-function burnStamp(d){ if(!crtOn||!term)return; const c=cellSize();
-  for(const ch of d){ if(ch.codePointAt(0)<32) continue;             // printable only
-    burns.push({ x:8+term.buffer.active.cursorX*c.w, y:6+(term.buffer.active.cursorY)*c.h, w:c.w, h:c.h, t:performance.now() });
+function cellGeom(){ const xt=$('#xterm'), scr=xt.querySelector('.xterm-screen')||xt, host=$('#termhost');
+  const rh=host.getBoundingClientRect(), rs=scr.getBoundingClientRect();   // real glyph-grid offset within the burn canvas
+  return { ox:rs.left-rh.left, oy:rs.top-rh.top, cw:scr.clientWidth/(term.cols||80), ch:scr.clientHeight/(term.rows||24) }; }
+function burnStamp(d){ if(!term)return; const g=cellGeom();               // burn on every keystroke, CRT or not
+  for(const ch of d){ if(ch.codePointAt(0)<32) continue;                  // printable only
+    burns.push({ x:g.ox+term.buffer.active.cursorX*g.cw, y:g.oy+term.buffer.active.cursorY*g.ch, w:g.cw, h:g.ch, t:performance.now() });
     if(burns.length>240) burns.shift(); } }
 function burnLoop(now){ requestAnimationFrame(burnLoop); if(!bctx)return;
   bctx.clearRect(0,0,bcv.width,bcv.height);
-  if(!crtOn||!burns.length)return;
+  if(!burns.length)return;
   for(let i=burns.length-1;i>=0;i--){ const b=burns[i]; const age=(now-b.t)/1000;
     if(age>=1){ burns.splice(i,1); continue; }
     const a=(1-age); bctx.fillStyle='rgba(120,255,180,'+(0.42*a)+')'; bctx.fillRect(b.x,b.y,b.w,b.h);
@@ -437,17 +438,17 @@ function solarDecl(){ const now=new Date(); const start=Date.UTC(now.getUTCFullY
   const doy=(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate())-start)/86400000;
   return -23.44*Math.cos(D2R*(360/365)*(doy+10)); }   // DEGREES, real-ish declination from date
 // Real sub-solar longitude from UTC: the geographic longitude with the Sun straight overhead
-// right now. Advances -15°/hr (real time). Because the Sun is placed with earthVec (which
-// includes the cosmetic earthSpin), it CO-ROTATES with the fast spin — so the day/night
-// terminator stays fixed on the real geography (e.g. through Atlanta at the real local hour)
-// and drifts only slowly, in real time. The fast spin is purely for looks; it does NOT drive
-// the shading, since dot(earthVec(place), sunDir) is independent of earthSpin.
+// right now. Advances -15°/hr (real time). The globe turns at its TRUE sidereal rate (earthSpin),
+// and sunDir adds +earthSpin so the sub-solar point always lands on the correct geographic
+// longitude — the day/night terminator stays pinned to the real geography (e.g. through Atlanta
+// at the real local hour) and drifts only slowly, in real time. Net effect: the Sun marker holds
+// its place on screen (never orbits) while the Earth rotates realistically beneath the terminator.
 function subSolarLon(){ const n=new Date();
   const s=n.getUTCHours()*3600+n.getUTCMinutes()*60+n.getUTCSeconds();
   return 180-(s/86400)*360; }
-// Sun fixed in inertial space (real declination + real sub-solar longitude, NO earthSpin) —
-// so it stays put while the Earth spins fast beneath it and the day/night sweeps across.
-function sunDir(){ const d=solarDecl()*D2R, lo=subSolarLon()*D2R;
+// Sun direction = real declination + (sub-solar longitude co-rotated by earthSpin), so the lit
+// hemisphere tracks the true geography exactly and the terminator sits at its proper point.
+function sunDir(){ const d=solarDecl()*D2R, lo=(subSolarLon()+earthSpin)*D2R;   // +earthSpin pins the terminator to the TRUE geography as the globe turns at its real rate (Sun stays put on screen, never orbits)
   return [Math.cos(d)*Math.sin(lo), Math.sin(d), Math.cos(d)*Math.cos(lo)]; }
 function dot3(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
 function cross3(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
@@ -566,7 +567,7 @@ function astPos(o,T){ const M=o.M0+o.sp*T, r=o.a*(1-o.e*o.e)/(1+o.e*Math.cos(M))
 
 function drawGlobe(dt){
   const T=performance.now()/1000; const big=isGlobeBig();
-  earthSpin += dt*6;                          // fast cosmetic spin; the Sun is fixed so it doesn't orbit
+  earthSpin += dt*(360/86164);                // Earth's TRUE sidereal rate — day/night sits at its real geographic position and drifts like the real world (no fast cosmetic spin; Sun co-rotates so it stays put)
   if(!big) yaw += dt*0.10;                     // gentle camera drift when small; user drives when big
   // CRT phosphor burn-in: fade the previous frame instead of clearing, so moving
   // satellites/asteroids/the ISS leave glowing trails. Plain clear when CRT is off.
