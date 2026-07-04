@@ -10,7 +10,7 @@ spawn per-request work). Endpoints:
   GET  /        the dashboard HTML
 """
 import http.server, socketserver, json, subprocess, threading, time, os, sys, re, math
-import urllib.request
+import urllib.request, urllib.error
 import select, struct, base64, hashlib, signal, shutil
 
 # ---- platform detection ----
@@ -45,6 +45,35 @@ def _claude_account():
         return o.get("emailAddress") or ""
     except Exception:
         return ""
+
+def _claude_oauth():
+    """Read the logged-in Claude OAuth token from the OS credential store.
+    Returns (access_token, expires_at_ms, subscription). The token is used ONLY to call
+    api.anthropic.com (exactly as Claude Code does) — never logged, printed, or committed."""
+    raw = None
+    p = os.path.expanduser("~/.claude/.credentials.json")     # Linux / plain-file installs
+    if os.path.exists(p):
+        try:
+            with open(p, encoding="utf-8") as f: raw = f.read()
+        except Exception: raw = None
+    if raw is None and sys.platform == "darwin":              # macOS Keychain
+        try:
+            raw = subprocess.run(["security","find-generic-password","-s","Claude Code-credentials","-w"],
+                                 capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception: raw = None
+    if not raw: return (None, 0, "")
+    try:
+        o = json.loads(raw).get("claudeAiOauth") or {}
+        return (o.get("accessToken"), o.get("expiresAt") or 0, o.get("subscriptionType") or "")
+    except Exception:
+        return (None, 0, "")
+
+def _iso_epoch(s):
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(s).timestamp())
+    except Exception:
+        return None
 
 def _load_config():
     """Settings precedence: env var > ~/.config/nerv-theme/config.json > DEMO_KEY.
@@ -255,6 +284,7 @@ class Sampler(threading.Thread):
         self.spaceweather = None
         self.usage = None    # Claude account token usage (parsed from ~/.claude transcripts)
         self.account = _claude_account()
+        self._tok = None; self._tok_exp = 0; self._sub = ""   # cached OAuth token (avoids re-hitting the Keychain)
         self.sats = []       # real satellites (orbital elements from Celestrak TLE)
         self.hubble = None   # Hubble Space Telescope orbital elements (Celestrak)
         self.quakes = []     # live USGS earthquakes
@@ -487,6 +517,50 @@ class Sampler(threading.Thread):
             out["aurora"] = kpv>=5
             self.spaceweather=out
 
+    def _get_token(self, force=False):
+        """Cached OAuth access token; re-reads the credential store only when near expiry
+        or when forced (e.g. after a 401), so the Keychain isn't hit every cycle."""
+        now_ms = time.time()*1000
+        if not force and self._tok and now_ms < self._tok_exp - 60000:
+            return self._tok, self._sub
+        tok, exp, sub = _claude_oauth()
+        self._tok, self._tok_exp, self._sub = tok, exp, sub
+        return tok, sub
+
+    def _usage_pct(self):
+        """TRUE subscription usage percentages (same source as Claude Code's /usage):
+        GET api.anthropic.com/api/oauth/usage with the OAuth bearer token."""
+        tok, sub = self._get_token()
+        if not tok: return None
+        def call(t):
+            req = urllib.request.Request("https://api.anthropic.com/api/oauth/usage",
+                headers={"Authorization":"Bearer "+t,
+                         "User-Agent":"claude-cli/2.1.201 (external, cli)",
+                         "Content-Type":"application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read().decode("utf-8","ignore"))
+        try:
+            d = call(tok)
+        except urllib.error.HTTPError as e:
+            if e.code == 401:                       # token rotated — re-read once and retry
+                tok, sub = self._get_token(force=True)
+                if not tok: return None
+                try: d = call(tok)
+                except Exception: return None
+            else: return None
+        except Exception:
+            return None
+        out = {"subscription": sub}
+        fh = d.get("five_hour") or {}; sd = d.get("seven_day") or {}
+        if fh.get("utilization") is not None: out["session_pct"] = round(float(fh["utilization"]))
+        if fh.get("resets_at"): out["session_reset"] = _iso_epoch(fh["resets_at"])
+        if sd.get("utilization") is not None: out["weekly_pct"] = round(float(sd["utilization"]))
+        if sd.get("resets_at"): out["weekly_reset"] = _iso_epoch(sd["resets_at"])
+        for lim in (d.get("limits") or []):
+            if lim.get("group") == "session": out["session_sev"] = lim.get("severity")
+            elif lim.get("kind") == "weekly_all": out["weekly_sev"] = lim.get("severity")
+        return out
+
     def fetch_usage(self):
         """Aggregate the logged-in account's Claude token usage from ~/.claude transcripts.
         Buckets into a rolling 5-hour session window, today, the last 7 days, and all recent,
@@ -558,6 +632,11 @@ class Sampler(threading.Thread):
         # rolling-window reset estimates: 5h after the window's earliest turn; weekly = 7d after
         if W["s5"][6]: res["s5_reset"]=int(W["s5"][6]+5*3600)
         if W["wk"][6]: res["wk_reset"]=int(W["wk"][6]+7*86400)
+        # TRUE plan percentages from Anthropic (same as /usage) — overrides the local estimate
+        try:
+            pct=self._usage_pct()
+            if pct: res["pct"]=pct
+        except Exception: pass
         self.usage=res
     def fetch_sats(self):
         # real satellites: Celestrak TLE -> mean orbital elements (approx Keplerian)

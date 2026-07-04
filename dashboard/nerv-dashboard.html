@@ -168,6 +168,12 @@
   .sw .badge{font-size:13px; letter-spacing:2px; padding:3px 10px; border-radius:5px; border:1px solid currentColor; font-weight:700}
   .sw .badge.QUIET{color:var(--grn)} .sw .badge.ACTIVE{color:var(--yel)} .sw .badge.STORM{color:var(--amber)} .sw .badge.SEVERE{color:var(--red)}
   .sw .aur{color:var(--cyan); font-size:10px; letter-spacing:1px; text-shadow:0 0 8px var(--cyan)}
+  .sw .upct{margin:3px 0 5px}
+  .sw .upct .uhead{display:flex; align-items:baseline; justify-content:space-between}
+  .sw .upct .upv{font-size:21px; font-weight:700; letter-spacing:1px; line-height:1}
+  .sw .ubar{height:9px; background:rgba(0,0,0,.45); border-radius:5px; overflow:hidden; margin:4px 0 2px}
+  .sw .ubar>i{display:block; height:100%; border-radius:5px; box-shadow:0 0 9px currentColor; transition:width .5s ease}
+  .sw .upct .ures{font-size:9px; color:var(--dim2); letter-spacing:1px}
   .sw .kpw{display:flex; flex-direction:column; gap:3px}
   .sw .kprow{display:flex; gap:3px; height:20px}
   .sw .kpc{flex:1; border-radius:2px; opacity:.18; transition:opacity .3s}
@@ -904,22 +910,32 @@ function pushFeed(){ const now=new Date().toTimeString().slice(0,8); let added=f
 /* ============ SPACE WEATHER ============ */
 function kpColor(i){ return i<4?'#46e88a':i<5?'#f5d128':i<7?'#e8a13c':'#ff3b3b'; }
 function fmtTok(n){ n=n||0; return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':(''+n); }
-function fmtReset(ts){ if(!ts)return '—'; let s=ts*1000-Date.now(); if(s<=0)return 'now'; const h=Math.floor(s/3600000),m=Math.floor((s%3600000)/60000); return (h>0?h+'h ':'')+m+'m'; }
-// ACCOUNT · CLAUDE TOKEN USAGE — /usage-style readout from the local transcripts.
+function fmtReset(ts){ if(!ts)return '—'; let s=ts*1000-Date.now(); if(s<=0)return 'now';
+  const d=Math.floor(s/86400000); s-=d*86400000; const h=Math.floor(s/3600000); const m=Math.floor((s%3600000)/60000);
+  return d>0?(d+'d '+h+'h'):((h>0?h+'h ':'')+m+'m'); }
+function usageColor(pct,sev){ if(sev==='critical'||pct>=95)return '#ff3b3b'; if(sev==='warning'||pct>=80)return '#e8a13c'; if(pct>=60)return '#f5d128'; return '#46e88a'; }
+function ubar(pct,col){ pct=Math.max(0,Math.min(100,pct||0)); return '<div class="ubar"><i style="width:'+pct+'%;background:'+col+';color:'+col+'"></i></div>'; }
+// ACCOUNT · CLAUDE TOKEN USAGE — real /usage percentages (Anthropic) + local token detail.
 function renderUsage(){ const el=$('#sw'); if(!el)return; const u=S.usage;
-  if(!u){ el.innerHTML='<div class="lab" style="margin:auto;text-align:center">READING USAGE LEDGER…</div>'; $('#swInfo').textContent='—'; return; }
-  const s5=u.s5||{}, day=u.day||{}, wk=u.wk||{};
-  $('#swInfo').textContent='$'+((wk.cost||0).toFixed(2))+' /wk';
-  el.innerHTML=
-    '<div class="storm"><span class="badge QUIET" style="border-color:#3fe0e0;color:#3fe0e0">ACCOUNT</span> <span class="aur" style="color:#8fe0c8">'+(u.account||'logged in')+'</span></div>'+
-    '<div class="kpw"><span class="lab">CURRENT 5-HOUR SESSION · <b style="color:#f5d128">'+fmtTok(s5.tokens)+'</b> TOKENS  ·  resets in <b style="color:#f5d128">'+fmtReset(u.s5_reset)+'</b></span></div>'+
-    '<div class="grid2">'+
-      '<div class="cell"><div class="lab">SESSION EST. COST</div><span class="v">$'+((s5.cost||0).toFixed(2))+'</span> <span class="u">5h · list price</span></div>'+
+  if(!u){ el.innerHTML='<div class="lab" style="margin:auto;text-align:center">READING USAGE…</div>'; $('#swInfo').textContent='—'; return; }
+  const p=u.pct||{}, s5=u.s5||{}, day=u.day||{}, wk=u.wk||{};
+  const sp=p.session_pct, wp=p.weekly_pct, hasPct=(sp!=null||wp!=null);
+  const spCol=usageColor(sp,p.session_sev), wpCol=usageColor(wp,p.weekly_sev);
+  $('#swInfo').textContent = (hasPct&&sp!=null) ? (sp+'% · 5h') : ('$'+((wk.cost||0).toFixed(2))+' /wk');
+  const plan=(p.subscription||'').toUpperCase();
+  let html='<div class="storm"><span class="badge QUIET" style="border-color:#3fe0e0;color:#3fe0e0">ACCOUNT'+(plan?' · '+plan:'')+'</span> <span class="aur" style="color:#8fe0c8">'+(u.account||'logged in')+'</span></div>';
+  if(hasPct){
+    html+='<div class="upct"><div class="uhead"><span class="lab">SESSION · 5-HOUR LIMIT</span><span class="upv" style="color:'+spCol+'">'+(sp!=null?sp+'%':'—')+'</span></div>'+ubar(sp,spCol)+'<div class="ures">used · resets in '+fmtReset(p.session_reset)+'</div></div>'+
+          '<div class="upct"><div class="uhead"><span class="lab">WEEKLY · 7-DAY LIMIT</span><span class="upv" style="color:'+wpCol+'">'+(wp!=null?wp+'%':'—')+'</span></div>'+ubar(wp,wpCol)+'<div class="ures">used · resets in '+fmtReset(p.weekly_reset)+'</div></div>';
+  } else {
+    html+='<div class="kpw"><span class="lab">CURRENT 5-HOUR SESSION · <b style="color:#f5d128">'+fmtTok(s5.tokens)+'</b> TOKENS · resets in <b style="color:#f5d128">'+fmtReset(u.s5_reset)+'</b><br><span style="color:var(--dim2)">plan % unavailable — sign in to Claude Code to enable</span></span></div>';
+  }
+  html+='<div class="grid2">'+
       '<div class="cell"><div class="lab">TODAY</div><span class="v">'+fmtTok(day.tokens)+'</span> <span class="u">tok · $'+((day.cost||0).toFixed(2))+'</span></div>'+
       '<div class="cell"><div class="lab">THIS WEEK</div><span class="v">'+fmtTok(wk.tokens)+'</span> <span class="u">tok · $'+((wk.cost||0).toFixed(2))+'</span></div>'+
-      '<div class="cell"><div class="lab">WEEK RESETS IN</div><span class="v" style="font-size:13px">'+fmtReset(u.wk_reset)+'</span></div>'+
     '</div>'+
-    '<div class="src">SESSION · '+fmtTok(s5.in)+' in · '+fmtTok(s5.out)+' out · '+fmtTok(s5.cache_read)+' cache-read · '+(s5.turns||0)+' turns   ·   est. list-price cost (subscription plans differ)</div>';
+    '<div class="src">SESSION · '+fmtTok(s5.in)+' in · '+fmtTok(s5.out)+' out · '+fmtTok(s5.cache_read)+' cache · '+(s5.turns||0)+' turns'+(hasPct?'   ·   % = live plan usage (Anthropic)':'   ·   est. list-price cost')+'</div>';
+  el.innerHTML=html;
 }
 function renderSpaceWeather(){ const el=$('#sw'); if(!el)return; const w=S.spaceweather;
   if(!w){ el.innerHTML='<div class="lab" style="margin:auto;text-align:center">AWAITING NOAA SWPC UPLINK…</div>'; $('#swInfo').textContent='—'; return; }
