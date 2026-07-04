@@ -37,6 +37,15 @@ SHELL_PORT = int(os.environ.get("NERV_SHELL_PORT", "7683"))
 PROJECT = os.environ.get("NERV_PROJECT", os.path.expanduser("~"))
 TODO_FILE = os.path.expanduser("~/.config/nerv-theme/todo.json")
 
+def _claude_account():
+    """Email of the logged-in Claude account (for the usage panel). Never returns keys."""
+    try:
+        with open(os.path.expanduser("~/.claude.json"), encoding="utf-8") as f:
+            o = (json.load(f).get("oauthAccount") or {})
+        return o.get("emailAddress") or ""
+    except Exception:
+        return ""
+
 def _load_config():
     """Settings precedence: env var > ~/.config/nerv-theme/config.json > DEMO_KEY.
     Keeps personal keys out of the committed source."""
@@ -244,6 +253,8 @@ class Sampler(threading.Thread):
         self.neo = []
         self.conns = []
         self.spaceweather = None
+        self.usage = None    # Claude account token usage (parsed from ~/.claude transcripts)
+        self.account = _claude_account()
         self.sats = []       # real satellites (orbital elements from Celestrak TLE)
         self.hubble = None   # Hubble Space Telescope orbital elements (Celestrak)
         self.quakes = []     # live USGS earthquakes
@@ -450,21 +461,104 @@ class Sampler(threading.Thread):
                 if isinstance(last,dict): out["kp"]=float(last.get("Kp")); out["kp_time"]=last.get("time_tag")
                 else: out["kp"]=float(last[1]); out["kp_time"]=last[0]
             except Exception: pass
-        wind=get_json("https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json", timeout=6)
-        if wind and len(wind)>1:
-            for row in reversed(wind[1:]):
-                try: out["wind_speed"]=round(float(row[2])); out["wind_density"]=round(float(row[1]),1); break
-                except Exception: pass
-        mag=get_json("https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json", timeout=6)
-        if mag and len(mag)>1:
-            for row in reversed(mag[1:]):
-                try: out["bz"]=round(float(row[3]),1); break
-                except Exception: pass
+        # NOAA retired the solar-wind/{plasma,mag}-1-day.json products (they 404 now); the
+        # DSCOVR/ACE real-time SUMMARY products carry the same current values as dicts.
+        spd=get_json("https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json", timeout=6)
+        try:
+            if isinstance(spd,list) and spd and isinstance(spd[0],dict):
+                v=spd[0].get("proton_speed", spd[0].get("WindSpeed"))
+                if v is not None: out["wind_speed"]=round(float(v))
+                d=spd[0].get("proton_density", spd[0].get("Density"))
+                if d is not None: out["wind_density"]=round(float(d),1)
+        except Exception: pass
+        mag=get_json("https://services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json", timeout=6)
+        try:
+            if isinstance(mag,list) and mag and isinstance(mag[0],dict):
+                if mag[0].get("bz_gsm") is not None: out["bz"]=round(float(mag[0]["bz_gsm"]),1)
+                if mag[0].get("bt") is not None: out["bt"]=round(float(mag[0]["bt"]),1)
+        except Exception: pass
         if out:
             kpv=out.get("kp",0)
             out["storm"] = "SEVERE" if kpv>=7 else "STORM" if kpv>=5 else "ACTIVE" if kpv>=4 else "QUIET"
+            # plain-English geomagnetic stability (NOAA G-scale) — "how stable Earth's field is"
+            out["stability"] = ("STABLE" if kpv<3 else "UNSETTLED" if kpv<4 else "ACTIVE" if kpv<5
+                                else "G1 MINOR STORM" if kpv<6 else "G2 MODERATE STORM" if kpv<7
+                                else "G3 STRONG STORM" if kpv<8 else "G4 SEVERE STORM" if kpv<9 else "G5 EXTREME STORM")
             out["aurora"] = kpv>=5
             self.spaceweather=out
+
+    def fetch_usage(self):
+        """Aggregate the logged-in account's Claude token usage from ~/.claude transcripts.
+        Buckets into a rolling 5-hour session window, today, the last 7 days, and all recent,
+        with an estimated list-price cost. Bounded so it stays cheap on the sampler thread."""
+        base=os.path.expanduser("~/.claude/projects")
+        if not os.path.isdir(base): return
+        now=time.time(); cutoff=now-8*86400
+        files=[]
+        for root,_,fns in os.walk(base):
+            for fn in fns:
+                if fn.endswith(".jsonl"):
+                    p=os.path.join(root,fn)
+                    try:
+                        m=os.path.getmtime(p)
+                        if m>=cutoff: files.append((m,p))
+                    except OSError: pass
+        files.sort(reverse=True); files=[p for _,p in files[:200]]   # cap worst-case work
+        # approx public list prices per million tokens: (input, output, cache_read, cache_write)
+        PRICE={"opus":(15.0,75.0,1.5,18.75),"sonnet":(3.0,15.0,0.30,3.75),"haiku":(0.80,4.0,0.08,1.0)}
+        def price(model):
+            m=(model or "").lower()
+            for k in PRICE:
+                if k in m: return PRICE[k]
+            return PRICE["sonnet"]
+        import calendar
+        def pts(s):
+            try: return calendar.timegm(time.strptime(s[:19],"%Y-%m-%dT%H:%M:%S"))
+            except Exception: return None
+        lt=time.localtime(now)
+        midnight=time.mktime((lt.tm_year,lt.tm_mon,lt.tm_mday,0,0,0,0,0,-1))
+        t5=now-5*3600; t7=now-7*86400
+        # each bucket: [in, out, cache_read, cache_create, cost, turns, earliest_ts]
+        W={k:[0,0,0,0,0.0,0,None] for k in ("s5","day","wk","all")}
+        def add(k,ts,it,ot,cr,cc,cost):
+            b=W[k]; b[0]+=it;b[1]+=ot;b[2]+=cr;b[3]+=cc;b[4]+=cost;b[5]+=1
+            if b[6] is None or ts<b[6]: b[6]=ts
+        seen=set()
+        for p in files:
+            try:
+                with open(p,encoding="utf-8",errors="ignore") as fh:
+                    for line in fh:
+                        if '"usage"' not in line: continue
+                        try: o=json.loads(line)
+                        except Exception: continue
+                        msg=o.get("message")
+                        if not isinstance(msg,dict): continue
+                        u=msg.get("usage")
+                        if not isinstance(u,dict): continue
+                        mid=msg.get("id")
+                        if mid:
+                            if mid in seen: continue          # dedupe streamed/duplicated rows
+                            seen.add(mid)
+                        ts=pts(o.get("timestamp") or "")
+                        if ts is None: continue
+                        it=u.get("input_tokens") or 0; ot=u.get("output_tokens") or 0
+                        cr=u.get("cache_read_input_tokens") or 0; cc=u.get("cache_creation_input_tokens") or 0
+                        pin,pout,pcr,pcc=price(msg.get("model"))
+                        cost=(it*pin+ot*pout+cr*pcr+cc*pcc)/1e6
+                        add("all",ts,it,ot,cr,cc,cost)
+                        if ts>=t7: add("wk",ts,it,ot,cr,cc,cost)
+                        if ts>=midnight: add("day",ts,it,ot,cr,cc,cost)
+                        if ts>=t5: add("s5",ts,it,ot,cr,cc,cost)
+            except OSError: continue
+        def pack(b):
+            return {"in":b[0],"out":b[1],"cache_read":b[2],"cache_create":b[3],
+                    "tokens":b[0]+b[1]+b[2]+b[3],"cost":round(b[4],2),"turns":b[5]}
+        res={"account":self.account,"s5":pack(W["s5"]),"day":pack(W["day"]),
+             "wk":pack(W["wk"]),"all":pack(W["all"])}
+        # rolling-window reset estimates: 5h after the window's earliest turn; weekly = 7d after
+        if W["s5"][6]: res["s5_reset"]=int(W["s5"][6]+5*3600)
+        if W["wk"][6]: res["wk_reset"]=int(W["wk"][6]+7*86400)
+        self.usage=res
     def fetch_sats(self):
         # real satellites: Celestrak TLE -> mean orbital elements (approx Keplerian)
         groups=[("starlink",900),("gps-ops",60),("oneweb",200),("galileo",40),("glo-ops",40),("stations",40),("weather",60),("geo",80)]
@@ -614,6 +708,9 @@ class Sampler(threading.Thread):
                 if c==9 or c%7200==90:   # operator location — once, refresh ~2h
                     try: self.fetch_geo()
                     except Exception: pass
+                if c==1 or c%20==15:     # Claude token usage — seed first (cheap local scan), refresh ~30s
+                    try: self.fetch_usage()
+                    except Exception: pass
                 snap={"ready":True,"t":time.time(),"cpu":round(cpu,1),"ncpu":self.ncpu,
                     "mem":mempct,"mem_used":memu,"mem_total":memt,
                     "net_down":round(down),"net_up":round(up),"iface":self.iface,
@@ -624,7 +721,7 @@ class Sampler(threading.Thread):
                     "conns":self.conns,"conn_count":len(self.conns),
                     "net_procs":netprocs,"mem_detail":memd,
                     "iss":self.iss,"neo":self.neo,
-                    "spaceweather":self.spaceweather,"sats":self.sats,
+                    "spaceweather":self.spaceweather,"usage":self.usage,"sats":self.sats,
                     "hubble":self.hubble,"quakes":self.quakes,"launch":self.launch,
                     "geo":self.geo}
                 with _lock: _stats.clear(); _stats.update(snap)
@@ -680,6 +777,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as e: self._send(500,f"missing html: {e}","text/plain")
         else: self._send(404,"not found","text/plain")
     def do_POST(self):
+        if self.path.startswith("/quit"):
+            # user hit the POWER button — shut this instance's backend down (other
+            # instances keep their own ports/processes and are unaffected).
+            self._send(200,"powering down","text/plain")
+            threading.Timer(0.4, lambda: os._exit(0)).start(); return
         if self.path.startswith("/todo"):
             try:
                 n=int(self.headers.get("Content-Length",0)); body=json.loads(self.rfile.read(n) or b"{}")

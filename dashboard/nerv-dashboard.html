@@ -63,6 +63,28 @@
     display:flex; flex-direction:column; min-height:0; overflow:hidden; transition:box-shadow .2s}
   .mod.fs{position:fixed; inset:7px; z-index:70; box-shadow:0 0 0 2px var(--amber)}
   .mod.hide{display:none}
+  /* floating EXIT control while a panel is fullscreen (Esc also works) */
+  #fsexit{display:none; position:fixed; top:14px; right:16px; z-index:80; align-items:center; gap:8px;
+    cursor:pointer; padding:6px 12px; border:1px solid var(--amber); border-radius:6px;
+    background:rgba(20,12,2,.82); color:var(--amber); font-size:11px; letter-spacing:2px;
+    box-shadow:0 0 14px rgba(232,161,60,.45)}
+  #fsexit:hover{background:rgba(50,28,4,.92); color:#ffd98a}
+  #fsexit small{color:var(--dim2); letter-spacing:1px; border:1px solid var(--dim2); border-radius:3px; padding:0 4px}
+  .btn.pwr{border-color:#7a2b2b; color:#ff7a6b}
+  .btn.pwr:hover{background:rgba(90,20,16,.5); color:#ff9c8f; border-color:#ff3b3b}
+  /* CRT power-off: black screen with a bright line collapsing to a dot, then dark */
+  #poweroff{display:none; position:fixed; inset:0; z-index:9999; background:#000; pointer-events:none}
+  #poweroff.on{display:block}
+  #poweroff .beam{position:absolute; left:4%; right:4%; top:50%; height:62vh; transform:translateY(-50%);
+    background:linear-gradient(#f2fff8,#bdf6da); border-radius:3px; opacity:0;
+    box-shadow:0 0 60px 10px #bdf6da, 0 0 18px 2px #fff}
+  #poweroff.seq .beam{animation:crtoff 0.9s cubic-bezier(.6,0,.35,1) forwards}
+  @keyframes crtoff{
+    0%{opacity:1; transform:translateY(-50%) scaleY(1) scaleX(1)}
+    42%{opacity:1; transform:translateY(-50%) scaleY(.010) scaleX(1)}
+    68%{opacity:1; transform:translateY(-50%) scaleY(.010) scaleX(.05)}
+    82%{opacity:.95; transform:translateY(-50%) scaleY(.010) scaleX(.02)}
+    100%{opacity:0; transform:translateY(-50%) scaleY(.010) scaleX(0)} }
   .mod>.tab{flex:0 0 auto; display:flex; align-items:center; gap:8px; font-size:10px; letter-spacing:2px;
     color:var(--amber); padding:3px 9px; border-bottom:1px solid var(--amber2); text-shadow:0 0 6px var(--amber); cursor:pointer; user-select:none}
   .mod>.tab.g{color:var(--grn); border-color:#1f5a3a; text-shadow:0 0 6px var(--grn)}
@@ -229,7 +251,7 @@
       <div class="body"><div class="mon" id="mon"></div><div class="monbig" id="monBig"></div><div class="catch" id="catch_mon" data-main="mon"></div></div>
     </section>
     <section class="mod" id="m_sw">
-      <div class="tab g">SPACE WEATHER · NOAA SWPC <span class="r" id="swInfo">—</span><span class="fsb" data-fs="sw">⤢</span></div>
+      <div class="tab g">ACCOUNT · CLAUDE TOKEN USAGE <span class="r" id="swInfo">—</span><span class="fsb" data-fs="sw">⤢</span></div>
       <div class="body"><div class="sw" id="sw"></div><div class="catch" id="catch_sw" data-main="sw"></div></div>
     </section>
     <section class="mod" id="m_feed">
@@ -247,7 +269,7 @@
     <div class="grp">
       <div class="btn" data-main="term">TERM</div><div class="btn" data-main="globe">GLOBE</div>
       <div class="btn" data-main="todo">TODO</div><div class="btn" data-main="mon">MONITOR</div>
-      <div class="btn" data-main="sw">SPACE WX</div><div class="btn" data-main="feed">FEED</div>
+      <div class="btn" data-main="sw">USAGE</div><div class="btn" data-main="feed">FEED</div>
     </div>
     <div class="sep"></div>
     <div class="btn" id="btnFs">⤢ FULLSCREEN</div>
@@ -259,10 +281,13 @@
     <div class="btn" id="btnScaleDown">A−</div><div class="btn" id="btnScaleUp">A+</div>
     <div class="btn on" id="btnCrt">▦ CRT</div>
     <div class="btn on" id="btnSound">♪ SOUND</div>
+    <div class="btn pwr" id="btnPower">⏻ POWER</div>
   </div>
 </div>
 <div id="scan" class="ovl"></div><div id="vig" class="ovl"></div>
 <div id="crtbar" class="ovl"></div><div id="kflash" class="ovl"></div>
+<div id="fsexit"><span>✕ EXIT FULLSCREEN</span><small>Esc</small></div>
+<div id="poweroff"><div class="beam"></div></div>
 <div id="tooltip"></div>
 
 <div id="bootseq">
@@ -313,7 +338,10 @@ function place(){
   ORDER.forEach(id=>{const c=$('#catch_'+id); if(c) c.style.display=(id===mainId&&!fsId)||id===fsId?'none':'block';
     $('#m_'+id).classList.toggle('big',(id===mainId&&!fsId)||id===fsId);});
   $$('#bar .btn[data-main]').forEach(b=>b.classList.toggle('on',b.dataset.main===mainId&&!fsId));
-  setTimeout(()=>{sizeGlobe();layoutMon();sizeBig();renderMonBig();renderFeedBig();renderSpaceWeather();if(typeof termFit==='function')termFit();},40);
+  const fx=$('#fsexit'); if(fx) fx.style.display=fsId?'flex':'none';
+  // re-fit everything after the box actually changes — run several times so late layout settles
+  const resize=()=>{ sizeGlobe();layoutMon();sizeBig();renderMonBig();renderFeedBig();renderUsage();if(typeof termFit==='function')termFit(); };
+  requestAnimationFrame(resize); setTimeout(resize,60); setTimeout(resize,240);
 }
 function setMain(id){ mainId=id; fsId=null; place(); uiBlip(); }
 function toggleFs(id){ fsId=(fsId===id)?null:id; place(); uiBlip(); }
@@ -368,6 +396,17 @@ $('#btnRestart').onclick=()=>{ termConnect(termMode); uiBlip(); };
 $('#btnFs').onclick=()=>toggleFs(mainId);
 $('#btnSound').onclick=()=>{ arm(); soundOn=!soundOn; applySound(); if(soundOn)uiBlip(); };
 $('#btnCrt').onclick=()=>{ crtOn=!crtOn; applyCrt(); uiBlip(); };
+{ const fx=$('#fsexit'); if(fx) fx.onclick=()=>{ if(fsId){fsId=null;place();uiBlip();} }; }
+// ---- POWER: CRT power-down animation, then shut this instance off ----
+let poweringOff=false;
+function powerOff(){ if(poweringOff)return; poweringOff=true;
+  arm();
+  try{ blip(320,.18,'sawtooth',.10); setTimeout(()=>blip(90,.5,'sawtooth',.09),120); }catch(e){}   // descending power-down whine
+  const po=$('#poweroff'); if(po){ po.classList.add('on'); requestAnimationFrame(()=>po.classList.add('seq')); }
+  setTimeout(()=>{ try{ fetch('/quit',{method:'POST'}); }catch(e){}   // stop this instance's backend
+    try{ window.close(); }catch(e){} }, 940);                          // and close the window if allowed
+}
+$('#btnPower').onclick=powerOff;
 
 /* ============ UI SCALE ============ */
 let scale=parseFloat(localStorage.getItem('nervScale')||'1');
@@ -864,6 +903,24 @@ function pushFeed(){ const now=new Date().toTimeString().slice(0,8); let added=f
 
 /* ============ SPACE WEATHER ============ */
 function kpColor(i){ return i<4?'#46e88a':i<5?'#f5d128':i<7?'#e8a13c':'#ff3b3b'; }
+function fmtTok(n){ n=n||0; return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':(''+n); }
+function fmtReset(ts){ if(!ts)return '—'; let s=ts*1000-Date.now(); if(s<=0)return 'now'; const h=Math.floor(s/3600000),m=Math.floor((s%3600000)/60000); return (h>0?h+'h ':'')+m+'m'; }
+// ACCOUNT · CLAUDE TOKEN USAGE — /usage-style readout from the local transcripts.
+function renderUsage(){ const el=$('#sw'); if(!el)return; const u=S.usage;
+  if(!u){ el.innerHTML='<div class="lab" style="margin:auto;text-align:center">READING USAGE LEDGER…</div>'; $('#swInfo').textContent='—'; return; }
+  const s5=u.s5||{}, day=u.day||{}, wk=u.wk||{};
+  $('#swInfo').textContent='$'+((wk.cost||0).toFixed(2))+' /wk';
+  el.innerHTML=
+    '<div class="storm"><span class="badge QUIET" style="border-color:#3fe0e0;color:#3fe0e0">ACCOUNT</span> <span class="aur" style="color:#8fe0c8">'+(u.account||'logged in')+'</span></div>'+
+    '<div class="kpw"><span class="lab">CURRENT 5-HOUR SESSION · <b style="color:#f5d128">'+fmtTok(s5.tokens)+'</b> TOKENS  ·  resets in <b style="color:#f5d128">'+fmtReset(u.s5_reset)+'</b></span></div>'+
+    '<div class="grid2">'+
+      '<div class="cell"><div class="lab">SESSION EST. COST</div><span class="v">$'+((s5.cost||0).toFixed(2))+'</span> <span class="u">5h · list price</span></div>'+
+      '<div class="cell"><div class="lab">TODAY</div><span class="v">'+fmtTok(day.tokens)+'</span> <span class="u">tok · $'+((day.cost||0).toFixed(2))+'</span></div>'+
+      '<div class="cell"><div class="lab">THIS WEEK</div><span class="v">'+fmtTok(wk.tokens)+'</span> <span class="u">tok · $'+((wk.cost||0).toFixed(2))+'</span></div>'+
+      '<div class="cell"><div class="lab">WEEK RESETS IN</div><span class="v" style="font-size:13px">'+fmtReset(u.wk_reset)+'</span></div>'+
+    '</div>'+
+    '<div class="src">SESSION · '+fmtTok(s5.in)+' in · '+fmtTok(s5.out)+' out · '+fmtTok(s5.cache_read)+' cache-read · '+(s5.turns||0)+' turns   ·   est. list-price cost (subscription plans differ)</div>';
+}
 function renderSpaceWeather(){ const el=$('#sw'); if(!el)return; const w=S.spaceweather;
   if(!w){ el.innerHTML='<div class="lab" style="margin:auto;text-align:center">AWAITING NOAA SWPC UPLINK…</div>'; $('#swInfo').textContent='—'; return; }
   const kp=w.kp!=null?w.kp:0, storm=w.storm||'QUIET';
@@ -872,12 +929,12 @@ function renderSpaceWeather(){ const el=$('#sw'); if(!el)return; const w=S.space
   const bz=w.bz, bzNeg=(bz!=null&&bz<0);
   el.innerHTML=
     '<div class="storm"><span class="badge '+storm+'">'+storm+'</span>'+(w.aurora?'<span class="aur">◈ AURORA LIKELY · HIGH LATITUDES</span>':'')+'</div>'+
-    '<div class="kpw"><span class="lab">PLANETARY K-INDEX · '+(kp!=null?kp.toFixed(2):'--')+'</span><div class="kprow">'+cells+'</div></div>'+
+    '<div class="kpw"><span class="lab">PLANETARY K-INDEX · '+(kp!=null?kp.toFixed(2):'--')+'  ·  EARTH FIELD <b style="color:'+kpColor(Math.floor(kp))+'">'+(w.stability||'—')+'</b></span><div class="kprow">'+cells+'</div></div>'+
     '<div class="grid2">'+
       '<div class="cell"><div class="lab">SOLAR WIND SPEED</div><span class="v">'+(w.wind_speed!=null?w.wind_speed:'--')+'</span> <span class="u">km/s</span></div>'+
-      '<div class="cell"><div class="lab">PROTON DENSITY</div><span class="v">'+(w.wind_density!=null?w.wind_density:'--')+'</span> <span class="u">p/cm³</span></div>'+
+      '<div class="cell"><div class="lab">IMF Bt (TOTAL)</div><span class="v">'+(w.bt!=null?w.bt:'--')+'</span> <span class="u">nT</span></div>'+
       '<div class="cell'+(bzNeg?' neg':'')+'"><div class="lab">IMF Bz</div><span class="v">'+(bz!=null?(bz>0?'+':'')+bz:'--')+'</span> <span class="u">nT'+(bzNeg?' · south':'')+'</span></div>'+
-      '<div class="cell"><div class="lab">GEOMAG STATE</div><span class="v" style="font-size:13px">'+storm+'</span></div>'+
+      '<div class="cell"><div class="lab">GEOMAG STABILITY</div><span class="v" style="font-size:12px">'+(w.stability||storm)+'</span></div>'+
     '</div>'+
     '<div class="src">SOURCE · NOAA SWPC · DSCOVR / ACE · planetary-k-index</div>';
 }
@@ -896,7 +953,7 @@ function onStats(){ pushH('cpu',S.cpu);pushH('mem',S.mem);pushH('disk',S.disk);
   $('#hSats').textContent=((S.sats||[]).length||0).toLocaleString();
   $('#trackInfo').textContent='TRACKING '+(S.neo||[]).length+' NEO';
   if(S.iss)$('#issline').textContent='ISS '+S.iss.lat.toFixed(1)+'°,'+S.iss.lon.toFixed(1)+'°';
-  pushFeed(); renderMonBig(); renderFeedBig(); renderSpaceWeather();
+  pushFeed(); renderMonBig(); renderFeedBig(); renderUsage();
   const al=S.cpu>=92||S.disk>=93||S.mem>=93; if(al)alarmSound();
 }
 function clock(){ $('#clock').textContent=new Date().toTimeString().slice(0,8)+'Z'; }
